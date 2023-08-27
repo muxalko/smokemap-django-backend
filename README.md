@@ -10,41 +10,41 @@ https://django-template.vercel.app/
 
 ## How it Works
 
-Our Django application, `example` is configured as an installed application in `vercel_app/settings.py`:
+Our Django application, `example` is configured as an installed application in `smokemap/settings.py`:
 
 ```python
-# vercel_app/settings.py
+# smokemap/settings.py
 INSTALLED_APPS = [
     # ...
-    'example',
+    'backend',
 ]
 ```
 
 We allow "\*.vercel.app" subdomains in `ALLOWED_HOSTS`, in addition to 127.0.0.1:
 
 ```python
-# vercel_app/settings.py
+# smokemap/settings.py
 ALLOWED_HOSTS = ['127.0.0.1', '.vercel.app']
 ```
 
 The `wsgi` module must use a public variable named `app` to expose the WSGI application:
 
 ```python
-# vercel_app/wsgi.py
+# smokemap/wsgi.py
 app = get_wsgi_application()
 ```
 
-The corresponding `WSGI_APPLICATION` setting is configured to use the `app` variable from the `vercel_app.wsgi` module:
+The corresponding `WSGI_APPLICATION` setting is configured to use the `app` variable from the `smokemap.wsgi` module:
 
 ```python
-# vercel_app/settings.py
-WSGI_APPLICATION = 'vercel_app.wsgi.app'
+# smokemap/settings.py
+WSGI_APPLICATION = 'smokemap.wsgi.app'
 ```
 
-There is a single view which renders the current time in `example/views.py`:
+There is a single view which renders the current time in `backend/views.py`:
 
 ```python
-# example/views.py
+# backend/views.py
 from datetime import datetime
 
 from django.http import HttpResponse
@@ -63,13 +63,13 @@ def index(request):
     return HttpResponse(html)
 ```
 
-This view is exposed a URL through `example/urls.py`:
+This view is exposed a URL through `backend/urls.py`:
 
 ```python
-# example/urls.py
+# backend/urls.py
 from django.urls import path
 
-from example.views import index
+from backend.views import index
 
 
 urlpatterns = [
@@ -77,15 +77,15 @@ urlpatterns = [
 ]
 ```
 
-Finally, it's made accessible to the Django server inside `vercel_app/urls.py`:
+Finally, it's made accessible to the Django server inside `smokemap/urls.py`:
 
 ```python
-# vercel_app/urls.py
+# smokemap/urls.py
 from django.urls import path, include
 
 urlpatterns = [
     ...
-    path('', include('example.urls')),
+    path('', include('backend.urls')),
 ]
 ```
 
