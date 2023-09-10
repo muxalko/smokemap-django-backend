@@ -17,7 +17,7 @@ import os
 # #from glob import glob
 # GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
 # GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
-print("PATH="+os.environ.get('PATH',''))
+
 GDAL_LIBRARY_PATH = "libgdal.so"
 GEOS_LIBRARY_PATH = "libgeos_c.so.1"
 
