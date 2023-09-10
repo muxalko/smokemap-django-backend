@@ -13,6 +13,12 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 from pathlib import Path
 import os
 
+# set gdal library path for django to find it
+from glob import glob
+
+GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
+GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+
 # load .env
 from dotenv import load_dotenv
 load_dotenv()
@@ -42,8 +48,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles', # Required for GraphiQL
+    'corsheaders',
     'graphene_django',
-    'smokemap'
+    'backend'
 ]
 
 MIDDLEWARE = [
@@ -54,6 +61,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.common.CommonMiddleware',
 ]
 
 ROOT_URLCONF = 'smokemap.urls'
@@ -81,7 +90,10 @@ WSGI_APPLICATION = 'smokemap.wsgi.app'
 # Note: Django modules for using databases are not support in serverless
 # environments like Vercel. You can use a database over HTTP, hosted elsewhere.
 
-ENGINE = 'django.db.backends.postgresql'
+# https://stackoverflow.com/questions/12538510/getting-databaseoperations-object-has-no-attribute-geo-db-type-error-when-do
+# This engine fails with: AttributeError: 'DatabaseOperations' object has no attribute 'geo_db_type'
+#ENGINE = 'django.db.backends.postgresql'
+ENGINE = 'django.contrib.gis.db.backends.postgis'
 HOST = os.environ.get('POSTGRES_HOST','127.0.0.1')
 PORT = os.environ.get('POSTGRES_PORT','5432')
 USER = os.environ.get('POSTGRES_USER','postgres')
@@ -149,3 +161,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 GRAPHENE = {
     "SCHEMA": "backend.schema.schema"
 }
+
+CORS_ALLOWED_ORIGINS = [
+    'http://127.0.0.1:3000',
+    'http://localhost:3000',
+    'http://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app',
+]
