@@ -16,8 +16,11 @@ import os
 # set gdal library path for django to find it
 from glob import glob
 
-GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
-GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+# GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
+# GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+
+GDAL_LIBRARY_PATH = "libgdal.so"
+GEOS_LIBRARY_PATH = "libgeos_c.so.1"
 
 # load .env
 from dotenv import load_dotenv

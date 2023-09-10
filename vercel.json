@@ -23,5 +23,15 @@
       "src": "/(.*)",
       "dest": "smokemap/wsgi.py"
     }
-  ]
+  ],
+  "rewrites": [
+    { "source": "/static", "destination": "/static" },
+    { "source": "/(.*)", "destination": "smokemap/wsgi.py" }
+  ],
+  "functions": {
+    "smokemap/wsgi.py": {
+      "runtime": "vercel-python-gis@1.0.0",
+      //"runtime_dev": "git+https://github.com/jperelli/vercel-python-gis.git#main@1.0.0" // for dev only
+    }
+  }
 }
