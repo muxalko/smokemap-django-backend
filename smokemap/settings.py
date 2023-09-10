@@ -14,11 +14,10 @@ from pathlib import Path
 import os
 
 # set gdal library path for django to find it
-from glob import glob
-
+# #from glob import glob
 # GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
 # GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
-
+print("PATH="+os.environ.get('PATH',''))
 GDAL_LIBRARY_PATH = "libgdal.so"
 GEOS_LIBRARY_PATH = "libgeos_c.so.1"
 
@@ -28,7 +27,6 @@ load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
