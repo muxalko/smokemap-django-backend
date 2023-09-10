@@ -1,15 +1,5 @@
 {
   "version": 2,
-  "routes": [
-    {
-      "src": "/static/(.*)",
-      "dest": "/static/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "smokemap/wsgi.py"
-    }
-  ],
   "rewrites": [
     { "source": "/static", "destination": "/static" },
     { "source": "/(.*)", "destination": "smokemap/wsgi.py" }
