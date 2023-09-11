@@ -16,5 +16,3 @@ venv.bak/
 
 # static files
 staticfiles_build/
-libgdal.*
-libgeos_c.*
