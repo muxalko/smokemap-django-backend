@@ -20,11 +20,24 @@ if os.getenv('SETTINGS_MODE') == 'local':
     print("DEVELOPMENT MODE !!! - Hello from " + str(os.getpid()))
     GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
     GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+    # SECURITY WARNING: don't run with debug turned on in production!
+    DEBUG = True
+    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '192.168.56.5']
+    CORS_ALLOWED_ORIGINS = [
+        'http://127.0.0.1:3000',
+        'http://localhost:3000',
+    ]
 else:
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
-    GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
-    GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
-
+    #GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
+    #GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
+    GDAL_LIBRARY_PATH = "libgdal.so"
+    GEOS_LIBRARY_PATH = "libgeos_c.so.1"
+    DEBUG = False
+    ALLOWED_HOSTS = ['.vercel.app']
+    CORS_ALLOWED_ORIGINS = [
+        'https://smokemap-django-backend-git-feature-recentchanges-muxalko.vercel.app'
+    ]
 
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
 print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
@@ -40,12 +53,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY','')
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '192.168.56.5', '.vercel.app']
-
 
 # Application definition
 
@@ -169,9 +176,3 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 GRAPHENE = {
     "SCHEMA": "backend.schema.schema"
 }
-
-CORS_ALLOWED_ORIGINS = [
-    'http://127.0.0.1:3000',
-    'http://localhost:3000',
-    'http://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app',
-]
