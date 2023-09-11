@@ -34,9 +34,11 @@ else:
     GDAL_LIBRARY_PATH = "libgdal.so"
     GEOS_LIBRARY_PATH = "libgeos_c.so.1"
     DEBUG = False
-    ALLOWED_HOSTS = ['.vercel.app']
+    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '192.168.56.5','.vercel.app']
     CORS_ALLOWED_ORIGINS = [
-        'https://smokemap-django-backend-git-feature-recentchanges-muxalko.vercel.app'
+        'http://127.0.0.1:3000',
+        'http://localhost:3000',
+        'https://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app'
     ]
 
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
