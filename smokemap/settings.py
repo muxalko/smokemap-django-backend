@@ -14,13 +14,20 @@ from pathlib import Path
 import os
 
 # set gdal library path for django to find it
-# #from glob import glob
-# GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
-# GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+from glob import glob
 
-GDAL_LIBRARY_PATH = "libgdal.so"
-GEOS_LIBRARY_PATH = "libgeos_c.so.1"
+if os.getenv('SETTINGS_MODE') == 'local':
+    print("DEVELOPMENT MODE !!! - Hello from " + str(os.getpid()))
+    GDAL_LIBRARY_PATH=glob('/usr/lib/libgdal.so.*')[0]
+    GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
+else:
+    print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
+    GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
+    GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
 
+
+print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
+print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
 # load .env
 from dotenv import load_dotenv
 load_dotenv()

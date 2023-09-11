@@ -1,23 +1,29 @@
 #!/bin/bash
-echo "DEBUG ENVIRONMENT"
-echo ""
-echo "printenv"
-printenv
-echo ""
-echo "ls"
-ls -ltrah
-echo ""
-echo "pwd"
-pwd
-echo ""
-echo "find libgdal.so"
-find / -name libgdal.so*
-echo ""
-echo "find libgdal.so"
-find / -name libgeos_c.so.1*
-echo ""
-echo "-----------"
+
+# IMPORTANT NOTE: after using the below section , rotate POSTGRES_PASSWORD, DJANGO_SECRET_KEY 
+# echo "DEBUG ENVIRONMENT"
+# echo ""
+# echo "printenv"
+# printenv
+# echo ""
+# echo "ls"
+# ls -ltrah
+# echo ""
+# echo "pwd"
+# pwd
+# echo ""
+# echo "find libgdal.so"
+# find / -name libgdal.so*
+# echo ""
+# echo "find libgdal.so"
+# find / -name libgeos_c.so.1*
+# echo ""
+# echo "-----------"
+#find / -name libproj.so.22
 echo "BUILD START"
+
+# set location for GDAL dependency files
+export LD_LIBRARY_PATH="$(pwd)/.vercel/builders/node_modules/vercel-python-gis/dist/files/"
 
 # Create a virtual environment
 echo "Creating a virtual environment..."
