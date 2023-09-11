@@ -1,4 +1,22 @@
 #!/bin/bash
+echo "DEBUG ENVIRONMENT"
+echo ""
+echo "printenv"
+printenv
+echo ""
+echo "ls"
+ls -ltrah
+echo ""
+echo "pwd"
+pwd
+echo ""
+echo "find libgdal.so"
+find / -name libgdal.so*
+echo ""
+echo "find libgdal.so"
+find / -name libgeos_c.so.1*
+echo ""
+echo "-----------"
 echo "BUILD START"
 
 # Create a virtual environment
