@@ -40,7 +40,7 @@ else:
         'http://localhost:3000',
         'https://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app',
         'https://smokemap-webapp-git-development-muxalko.vercel.app',
-        'https://smokemap-webapp-muxalko.vercel.app'
+        'https://smokemap-webapp-muxalko.vercel.app',
         'https://smokemap.vercel.app'
     ]
 
