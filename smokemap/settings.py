@@ -38,7 +38,10 @@ else:
     CORS_ALLOWED_ORIGINS = [
         'http://127.0.0.1:3000',
         'http://localhost:3000',
-        'https://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app'
+        'https://smokemap-webapp-git-feature-recentchanges-muxalko.vercel.app',
+        'https://smokemap-webapp-git-development-muxalko.vercel.app',
+        'https://smokemap-webapp-muxalko.vercel.app'
+        'https://smokemap.vercel.app'
     ]
 
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
