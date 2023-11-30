@@ -23,7 +23,8 @@ from graphene_django.views import GraphQLView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('backend.urls')),
-
+    # tiles server
+    # path("tiles/", include("django_tiles_gl.urls")),
     #(Change graphiql=True to graphiql=False if you do not want to use the GraphiQL API browser.)
     #path("graphql/", GraphQLView.as_view(graphiql=True)),
     #exempt your Graphql endpoint from CSRF protection

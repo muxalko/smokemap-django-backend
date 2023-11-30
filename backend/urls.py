@@ -1,9 +1,25 @@
 # backend/urls.py
-from django.urls import path
+# from django.urls import path
 
-from backend.views import index
+# from backend.views import index
 
 
+# urlpatterns = [
+#     path('', index),
+# ]
+
+from django.urls import include, path
+from rest_framework import routers
+from backend import views
+
+router = routers.DefaultRouter()
+router.register(r'users', views.UserViewSet)
+router.register(r'groups', views.GroupViewSet)
+router.register(r'categories', views.CategoryViewSet)
+router.register(r'places', views.PlaceViewSet)
+# Wire up our API using automatic URL routing.
+# Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', index),
+    path('', include(router.urls)),
+    path('api-auth/', include('rest_framework.urls', namespace='rest_framework'))
 ]

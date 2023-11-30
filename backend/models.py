@@ -2,15 +2,13 @@ from django.db import models
 from geopy.geocoders import Nominatim
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
+from django.contrib.postgres.fields import ArrayField
 
 # Create your models here.
-class Place(models.Model):
-    name = models.CharField(unique=True, max_length=255)
-    location = models.PointField()
-
+ 
 class Category(models.Model):
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(unique=True, null=True)
+    name = models.CharField(max_length=25)
+    description = models.CharField(null=True, max_length=255)
     
     class Meta:
         verbose_name_plural = 'Categories'
@@ -18,10 +16,9 @@ class Category(models.Model):
         return self.name
 
 class Tag(models.Model):
-    name = models.CharField(max_length=100) 
-    slug = models.SlugField(unique=True, null=True)
+    name = models.CharField(max_length=50) 
     # the tag belongs to a category
-    category = models.ForeignKey(Category, blank=True, on_delete=models.PROTECT)
+    # category = models.ForeignKey(Category, blank=True, on_delete=models.PROTECT)
 
     class Meta:
         verbose_name_plural = 'Tags'
@@ -54,27 +51,49 @@ class Address(models.Model):
     def __str__(self):
         return "{} ({},{})".format(self.address,self.lat,self.long)
 
+def get_tags_default():
+    # return list(dict([]).keys())
+    return []
+
 class Request(models.Model):
     name = models.CharField(max_length=100)
-    description = models.TextField()
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, default=-1)
+    description = models.CharField(max_length=255)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
-    # imageurl = models.URLField(blank=True)
+    tags = ArrayField(
+        models.CharField(null=True, max_length=25),
+        default=get_tags_default
+    )
+    # images = ArrayField(
+    #     models.CharField(blank=True, max_length=255)
+    # )
     date_created = models.DateTimeField(auto_now_add=True)
     date_updated = models.DateTimeField(auto_now=True)
     date_approved = models.DateTimeField(blank=True, null=True)
     approved = models.BooleanField(auto_created=True, default=False)
     approved_comment = models.TextField(blank=True, null=True)
     approved_by = models.CharField(auto_created=True, blank=True, null=True, max_length=100)
-
+    
+    # tags = models.ManyToManyField('Tag')
     # the item belongs to one category 
     # if having a category is required please remove blank=True
     # category = models.ForeignKey(Category, blank=True) 
     #category = models.ForeignKey(Category, related_name='requests', on_delete=models.DO_NOTHING, blank=True, null=True)
-    #tags = models.ManyToManyField('Tag')
-
+    
     class Meta:
         ordering = ['-date_created']
     
     def __str__(self):
-        return "{}: {} - {}, Address: {}".format(self.date_created,self.name,self.description,self.address.address)
+        return "{}: {} - {}, {}".format(self.date_created,self.name,self.description,self.address.address)
 
+class Place(models.Model):
+    name = models.CharField(unique=True, max_length=255)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, default=-1)
+    description = models.TextField(max_length=255, null=True)
+    location = models.PointField()
+    class Meta:
+        verbose_name_plural = 'Places'
+    def __str__(self):
+        return "{} ({},{})".format(self.name,self.location[0],self.location[1])
+
+   

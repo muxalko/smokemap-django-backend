@@ -26,6 +26,7 @@ if os.getenv('SETTINGS_MODE') == 'local':
     CORS_ALLOWED_ORIGINS = [
         'http://127.0.0.1:3000',
         'http://localhost:3000',
+        'http://192.168.56.5:3000',
     ]
 else:
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
@@ -70,7 +71,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles', # Required for GraphiQL
     'corsheaders',
     'graphene_django',
-    'backend'
+    'rest_framework',
+    'rest_framework_gis',
+    'django.contrib.gis',
+    # 'django_tiles_gl',
+    'backend',
 ]
 
 MIDDLEWARE = [
@@ -131,6 +136,8 @@ DATABASES = {
     }
 }
 
+# where are the files for tile server located
+# MBTILES_DATABASE = BASE_DIR / "data" / "places.mbtiles"
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
