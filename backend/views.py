@@ -6,6 +6,7 @@
 
 # from django.core.serializers import serialize
 from backend.models import Place, Category, Tag, Address, Request
+from backend.models import Place, Category, Tag, Address, Request
 
 from django.contrib.auth.models import User, Group
 from rest_framework import viewsets, mixins, permissions
@@ -79,31 +80,23 @@ class RequestViewSet(viewsets.ModelViewSet):
     """
     queryset = Request.objects.all()
     serializer_class = RequestSerializer
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
 
 class PlaceViewSet(viewsets.ModelViewSet):
     """
-    API endpoint that allows places to be viewed.
+    API endpoint that allows addresses to be viewed.
     """
-    queryset = Place.objects.all()
-    serializer_class = PlaceSerializer
+    queryset = Address.objects.all()
+    serializer_class = AddressSerializer
     # permission_classes = [permissions.IsAuthenticated]
-    # bbox_filter_field = 'address.location'
+    bbox_filter_field = 'location'
     
     #TMSTileFilter: /?tile=8/100/200
     # filter_backends = (TMSTileFilter,)
     #InBBoxFilter:  /?in_bbox=-90,29,-89,35
-    # filter_backends = (InBBoxFilter,)
-    # bbox_filter_include_overlapping = True # Optional
-
-# class LocationList(ListAPIView):
-
-#     queryset = Place.objects.all()
-#     serializer_class = PlaceSerializer
-#     bbox_filter_field = 'point'
-#     filter_backends = (InBBoxFilter,)
-#     bbox_filter_include_overlapping = True # Optional
+    filter_backends = (InBBoxFilter,)
+    bbox_filter_include_overlapping = True # Optional
 
 class CategoryViewSet(viewsets.ModelViewSet):
     """
@@ -112,6 +105,15 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [permissions.IsAuthenticated]
+
+class TagViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint that allows categories to be viewed or edited.
+    """
+    queryset = Tag.objects.all()
+    serializer_class = TagSerializer
+    # permission_classes = [permissions.IsAuthenticated]
+
 
 class TagViewSet(viewsets.ModelViewSet):
     """
