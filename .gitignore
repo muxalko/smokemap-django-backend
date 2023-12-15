@@ -16,3 +16,4 @@ venv.bak/
 
 # static files
 staticfiles_build/
+.env*
