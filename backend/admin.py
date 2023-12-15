@@ -5,9 +5,9 @@ from .models import Category, Tag, Address, Request, Place
 # Register your models here.
 admin.site.register(Category)
 admin.site.register(Tag)
-admin.site.register(Address)
+admin.site.register(Place)
 admin.site.register(Request)
 
-@admin.register(Place)
+@admin.register(Address)
 class PlaceAdmin(OSMGeoAdmin):
-    list_display = ('name', 'location')
+    list_display = ('addressString', 'location')
