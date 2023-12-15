@@ -46,7 +46,9 @@ class RequestType(DjangoObjectType):
         fields = (
             'id',
             'name',
+            'category',
             'description',
+            'tags',
             'address',
             # 'imageurl',
             'date_created',
@@ -60,8 +62,8 @@ class RequestType(DjangoObjectType):
 
 class Query(graphene.ObjectType):
     categories = graphene.List(CategoryType)
-    #tags = graphene.List(TagType)
-    #addresses = graphene.List(AddressType)
+    tags = graphene.List(TagType)
+    addresses = graphene.List(AddressType)
     requests = graphene.List(RequestType)
     requests_to_approve = graphene.List(RequestType)
     requests_by_id = graphene.Field(
@@ -82,7 +84,6 @@ class Query(graphene.ObjectType):
     def resolve_tags(root, info, **kwargs):
         # Querying a list
         return Tag.objects.all()
-
     def resolve_addresses(root, info, **kwargs):
         # Querying a list
         return Address.objects.all()
@@ -135,9 +136,10 @@ class UpdateCategory(graphene.Mutation):
     category = graphene.Field(CategoryType)
 
     @classmethod
-    def mutate(cls, root, info, name, id):
+    def mutate(cls, root, info, id, name, description):
         category = Category.objects.get(pk=id)
         category.name = name
+        category.description = description
         category.save()
 
         return UpdateCategory(category=category)
@@ -147,14 +149,16 @@ class CreateCategory(graphene.Mutation):
     class Arguments:
         # Mutation to create a category
         name = graphene.String(required=True)
+        description = graphene.String(required=False)
 
     # Class attributes define the response of the mutation
     category = graphene.Field(CategoryType)
 
     @classmethod
-    def mutate(cls, root, info, name):
+    def mutate(cls, root, info, name, description):
         category = Category()
         category.name = name
+        category.description = description
         category.save()
 
         return CreateCategory(category=category)
@@ -162,14 +166,11 @@ class CreateCategory(graphene.Mutation):
 
 class RequestInput(graphene.InputObjectType):
     name = graphene.String()
+    category = graphene.String()
     description = graphene.String()
     address_string = graphene.String()
-    #imageurl = graphene.String()
-    #date_created = graphene.DateTime() #YYYY-MM-DDTHH:mm:ss.sssZ
-    #date_approved = graphene.DateTime()
-    #approved = graphene.Boolean
-    #category = graphene.String()
-    #tags = graphene.String()
+    tags = graphene.List(graphene.String)
+    # images = graphene.List(graphene.String)
 
 
 

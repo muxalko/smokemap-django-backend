@@ -6,7 +6,6 @@
 
 # from django.core.serializers import serialize
 from backend.models import Place, Category, Tag, Address, Request
-from backend.models import Place, Category, Tag, Address, Request
 
 from django.contrib.auth.models import User, Group
 from rest_framework import viewsets, mixins, permissions
@@ -105,15 +104,6 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [permissions.IsAuthenticated]
-
-class TagViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows categories to be viewed or edited.
-    """
-    queryset = Tag.objects.all()
-    serializer_class = TagSerializer
-    # permission_classes = [permissions.IsAuthenticated]
-
 
 class TagViewSet(viewsets.ModelViewSet):
     """

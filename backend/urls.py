@@ -1,7 +1,7 @@
 # backend/urls.py
-from django.urls import path
+# from django.urls import path
 
-from backend.views import index
+# from backend.views import index
 
 
 # urlpatterns = [
@@ -23,5 +23,6 @@ router.register(r'requests', views.RequestViewSet)
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
-    path('', index),
+    path('', include(router.urls)),
+    path('api-auth/', include('rest_framework.urls', namespace='rest_framework'))
 ]
