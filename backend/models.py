@@ -74,11 +74,6 @@ def get_tags_default():
     # return list(dict([]).keys())
     return []
 
-
-def get_tags_default():
-    # return list(dict([]).keys())
-    return []
-
 class Request(models.Model):
     name = models.CharField(max_length=100)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, default=-1)
