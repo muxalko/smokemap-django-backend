@@ -64,7 +64,7 @@ class AddressViewSet(mixins.RetrieveModelMixin,
     """
     queryset = Address.objects.all()
     serializer_class = AddressSerializer
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
     bbox_filter_field = 'location'
     
     #TMSTileFilter: /?tile=8/100/200
@@ -79,12 +79,12 @@ class RequestViewSet(viewsets.ModelViewSet):
     """
     queryset = Request.objects.all()
     serializer_class = RequestSerializer
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
 
 class PlaceViewSet(viewsets.ModelViewSet):
     """
-    API endpoint that allows places to be viewed.
+    Public API endpoint that allows places to be viewed.
     """
     queryset = Place.objects.all()
     serializer_class = PlaceSerializer
@@ -119,4 +119,4 @@ class TagViewSet(viewsets.ModelViewSet):
     """
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
