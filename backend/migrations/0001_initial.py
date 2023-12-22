@@ -3,6 +3,7 @@
 import backend.models
 import django.contrib.gis.db.models.fields
 import django.contrib.postgres.fields
+
 from django.db import migrations, models
 import django.db.models.deletion
 
@@ -21,6 +22,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('addressString', models.CharField(max_length=255, unique=True)),
                 ('location', django.contrib.gis.db.models.fields.PointField(srid=4326)),
+
             ],
         ),
         migrations.CreateModel(
@@ -51,6 +53,7 @@ class Migration(migrations.Migration):
                 ('approved_by', models.CharField(auto_created=True, blank=True, max_length=100, null=True)),
                 ('approved', models.BooleanField(auto_created=True, default=False)),
                 ('name', models.CharField(max_length=100)),
+
                 ('description', models.CharField(max_length=255)),
                 ('tags', django.contrib.postgres.fields.ArrayField(base_field=models.CharField(max_length=50, null=True), default=backend.models.get_tags_default, size=None)),
                 ('date_created', models.DateTimeField(auto_now_add=True)),
@@ -59,6 +62,7 @@ class Migration(migrations.Migration):
                 ('approved_comment', models.TextField(blank=True, null=True)),
                 ('address', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='backend.address')),
                 ('category', models.ForeignKey(default=-1, on_delete=django.db.models.deletion.PROTECT, to='backend.category')),
+
             ],
             options={
                 'ordering': ['-date_created'],

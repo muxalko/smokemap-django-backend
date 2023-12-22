@@ -80,10 +80,11 @@ class Query(graphene.ObjectType):
     def resolve_categories(root, info, **kwargs):
         # Querying a list
         return Category.objects.all()
-
+     
     def resolve_tags(root, info, **kwargs):
         # Querying a list
         return Tag.objects.all()
+      
     def resolve_addresses(root, info, **kwargs):
         # Querying a list
         return Address.objects.all()
@@ -107,8 +108,7 @@ class Query(graphene.ObjectType):
     def resolve_places(root, info, **kwargs):
         # Querying a list
         return Place.objects.all()
-
-
+      
 class CreatePlace(graphene.Mutation):
     place = graphene.Field(PlaceType)
 
@@ -124,7 +124,6 @@ class CreatePlace(graphene.Mutation):
     def mutate(cls, root, info, **args):
         place = Place.objects.create(**args)
         return cls(place=place)
-
 
 class UpdateCategory(graphene.Mutation):
     class Arguments:
@@ -150,6 +149,7 @@ class CreateCategory(graphene.Mutation):
         # Mutation to create a category
         name = graphene.String(required=True)
         description = graphene.String(required=False)
+
 
     # Class attributes define the response of the mutation
     category = graphene.Field(CategoryType)
@@ -177,7 +177,7 @@ class CreateRequest(graphene.Mutation):
         input = RequestInput(required=True)
 
     request = graphene.Field(RequestType)
-
+    
     @classmethod
     def mutate(cls, root, info, input):
         # apply validation steps
@@ -253,7 +253,6 @@ class CreateRequest(graphene.Mutation):
 
         return CreateRequest(request=request)
 
-
 class UpdateRequest(graphene.Mutation):
     class Arguments:
         input = RequestInput(required=True)
@@ -302,7 +301,7 @@ class ApproveRequest(graphene.Mutation):
         id = graphene.ID()
 
     request = graphene.Field(RequestType)
-
+    
     @classmethod
     def mutate(cls, root, info, input, id):
         print("Start approval process for request id=", id)
@@ -400,6 +399,5 @@ class Mutation(graphene.ObjectType):
     update_request = UpdateRequest.Field()
     approve_request = ApproveRequest.Field()
     delete_request = DeleteRequest.Field()
-
 
 schema = graphene.Schema(query=Query, mutation=Mutation)

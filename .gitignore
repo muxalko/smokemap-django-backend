@@ -18,3 +18,4 @@ venv.bak/
 staticfiles_build/
 .env*
 node_modules
+
