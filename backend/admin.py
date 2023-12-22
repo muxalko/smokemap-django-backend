@@ -10,4 +10,5 @@ admin.site.register(Request)
 
 @admin.register(Place)
 class PlaceAdmin(OSMGeoAdmin):
-    list_display = ('name', 'location')
+    list_display = ('name', 'address')
+
