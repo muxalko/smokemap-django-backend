@@ -13,3 +13,9 @@ venv/
 ENV/ 
 env.bak/ 
 venv.bak/ 
+
+# static files
+staticfiles_build/
+.env*
+node_modules
+
