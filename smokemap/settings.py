@@ -131,7 +131,7 @@ PORT = os.environ.get('POSTGRES_PORT','5432')
 USER = os.environ.get('POSTGRES_USER','postgres')
 PASS = os.environ.get('POSTGRES_PASSWORD','postgres')
 NAME = os.environ.get('POSTGRES_DB','postgres')
-OPTIONS = os.environ.get('POSTGRES_OPTIONS','-c search_path=smokemap,public')
+OPTIONS = os.environ.get('POSTGRES_OPTIONS','-c search_path=smokemap')
 DATABASES = {
      'default': {
         'ENGINE': ENGINE,
