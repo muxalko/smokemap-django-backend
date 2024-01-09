@@ -5,7 +5,9 @@ from django.core.exceptions import ValidationError
 import graphql_geojson
 from django.utils import timezone
 # from django.contrib.gis import geos
-
+from graphene_file_upload.scalars import Upload
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 
 class PlaceType(DjangoObjectType):
     class Meta:
@@ -163,6 +165,36 @@ class CreateCategory(graphene.Mutation):
 
         return CreateCategory(category=category)
 
+class UploadFile(graphene.Mutation):
+    class Arguments:
+        file = Upload(required=True)
+
+    success = graphene.Boolean()
+
+    def mutate(self, info, file, **kwargs):
+        print("Filename: ", file)
+        print(f'File Size in Bytes is {file.size}')
+        #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
+        path = default_storage.save(file, ContentFile(file.read()))
+        print("Saved to ", path)
+
+        return UploadFile(success=True)
+
+class UploadFiles(graphene.Mutation):
+    class Arguments:
+        files = graphene.List(Upload)
+
+    success = graphene.Boolean()
+
+    def mutate(self, info, files, **kwargs):
+        for file in files:
+            print("Filename: ", file)
+            print(f'File Size in Bytes is {file.size}')
+            #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
+            path = default_storage.save(file, ContentFile(file.read()))
+            print("Saved to ", path)
+
+        return UploadFiles(success=True)
 
 class RequestInput(graphene.InputObjectType):
     name = graphene.String()
@@ -170,7 +202,8 @@ class RequestInput(graphene.InputObjectType):
     description = graphene.String()
     address_string = graphene.String()
     tags = graphene.List(graphene.String)
-    # images = graphene.List(graphene.String)
+    images = graphene.List(Upload)
+    
 
 class CreateRequest(graphene.Mutation):
     class Arguments:
@@ -250,6 +283,13 @@ class CreateRequest(graphene.Mutation):
             print("Request(Category:{}, Name: {}, Desc: {}, Address: {}, Tags: {})".format(
                 request.category, request.name, request.description, request.address, request.tags))
             request.save()
+
+        if len(input.images) > 1:
+            for file in  input.images:
+                print("Filename: ", file)
+                #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
+                path = default_storage.save(file, ContentFile(file.read()))
+                print("Saved to ", path)
 
         return CreateRequest(request=request)
 
@@ -399,5 +439,7 @@ class Mutation(graphene.ObjectType):
     update_request = UpdateRequest.Field()
     approve_request = ApproveRequest.Field()
     delete_request = DeleteRequest.Field()
+    upload_file = UploadFile.Field()
+    upload_files = UploadFiles.Field()
 
 schema = graphene.Schema(query=Query, mutation=Mutation)
