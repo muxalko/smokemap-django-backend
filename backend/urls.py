@@ -20,6 +20,7 @@ router.register(r'tags', views.TagViewSet)
 router.register(r'places', views.PlaceViewSet)
 router.register(r'addresses', views.AddressViewSet)
 router.register(r'requests', views.RequestViewSet)
+router.register(r'images', views.ImageViewSet)
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [

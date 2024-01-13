@@ -5,12 +5,12 @@
 # from django.contrib.auth.models import User
 
 # from django.core.serializers import serialize
-from backend.models import Place, Category, Tag, Address, Request
+from backend.models import Place, Category, Tag, Address, Request, Image
 
 from django.contrib.auth.models import User, Group
 from rest_framework import viewsets, mixins, permissions
 from backend.serializers import UserSerializer, GroupSerializer, \
-    CategorySerializer, PlaceSerializer, AddressSerializer, TagSerializer, RequestSerializer
+    CategorySerializer, PlaceSerializer, AddressSerializer, TagSerializer, RequestSerializer, ImageSerializer
 from rest_framework_gis.filters import InBBoxFilter, TMSTileFilter
 
 # #password = User.objects.make_random_password() # 7Gjk2kd4T9
@@ -119,4 +119,12 @@ class TagViewSet(viewsets.ModelViewSet):
     """
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class ImageViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint that allows images to be viewed or edited.
+    """
+    queryset = Image.objects.all()
+    serializer_class = ImageSerializer
     permission_classes = [permissions.IsAuthenticated]
