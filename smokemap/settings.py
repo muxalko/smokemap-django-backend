@@ -66,8 +66,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY','')
 
-# Application definition
+# AWS Params
+# S3 Storage Configurations for retreiving presigned post url
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID','')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY','')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME','')
+AWS_S3_REGION_NAME = os.environ.get('AWS_REGION','')
 
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -82,7 +88,6 @@ INSTALLED_APPS = [
     'django.contrib.gis',
     # 'django_tiles_gl',
     'backend',
-
 ]
 
 MIDDLEWARE = [

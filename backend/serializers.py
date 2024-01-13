@@ -2,7 +2,7 @@ from django.contrib.auth.models import User, Group
 from rest_framework_gis import serializers as gis_serializers
 from rest_framework import serializers as rest_serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer, GeometrySerializerMethodField
-from backend.models import Place, Category, Tag, Address, Request
+from backend.models import Place, Category, Tag, Address, Request, Image
 from rest_framework_gis.filters import InBBoxFilter
 
 
@@ -36,6 +36,11 @@ class RequestSerializer(rest_serializers.HyperlinkedModelSerializer):
         model = Request
         fields = ['name','category','description','address', 'tags']
 
+class ImageSerializer(rest_serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Image
+        fields = ['name','url','metadata']
+
 class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
 # class PlaceSerializer(rest_serializers.HyperlinkedModelSerializer):
     
@@ -55,10 +60,22 @@ class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
     # tag = TagSerializer(read_only=True, many=True)
     # list of strings
     tags = TagListingField(many=True, read_only=True)
+
+    # Moved to fetch images when feature is clicked
+    # images = rest_serializers.SerializerMethodField('get_images')
+    # def get_images(self, value):
+    #     return Image.objects.filter(place_id=value).values_list("url", flat=True)
+
+    # add place ID to properties
+    place_id = rest_serializers.SerializerMethodField('get_place_id')
+    def get_place_id(self, value):
+         return value.id
+    
+
     class Meta:
         model = Place
         geo_field = "location"
-        fields = ['name','category','description','address', 'tags']
+        fields = ['place_id', 'name','category','description','address', 'tags']
 
 
 class AddressSerializer(gis_serializers.GeoFeatureModelSerializer):

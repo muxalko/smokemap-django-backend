@@ -35,8 +35,6 @@ class Address(models.Model):
     addressString = models.CharField(unique=True, max_length=255)
     location = models.PointField()
     
-    
-          
     def save(self, *args, **kwargs):
         validated = True
         validation_message = ''
@@ -69,7 +67,6 @@ class Address(models.Model):
     def __str__(self):
         return "{} ({},{})".format(self.addressString, self.location[0], self.location[1])
 
-
 def get_tags_default():
     # return list(dict([]).keys())
     return []
@@ -95,6 +92,7 @@ class Request(models.Model):
     approved_by = models.CharField(
         auto_created=True, blank=True, null=True, max_length=100)
 
+    # images_set_id = models.CharField(blank=True, null=True, max_length=255)
     # the item belongs to one category
     # if having a category is required please remove blank=True
     # category = models.ForeignKey(Category, blank=True)
@@ -113,10 +111,23 @@ class Place(models.Model):
     description = models.TextField(max_length=255, null=True)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     tags = models.ManyToManyField(Tag, related_name="places")
-
+    # images_set_id = models.CharField(blank=True, null=True, max_length=255)
     class Meta:
         verbose_name_plural = 'Places'
 
     def __str__(self):
         return "{}".format(self.name)
         # return "{} ({},{})".format(self.name, self.address.location[0], self.address.location[1])
+
+class Image(models.Model):
+    set_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    url = models.CharField(max_length=255)
+    metadata = models.JSONField(blank=True, null=True)
+    request = models.ForeignKey(Request, on_delete=models.DO_NOTHING, null=True)
+    place = models.ForeignKey(Place, on_delete=models.DO_NOTHING, null=True)
+    class Meta:
+        verbose_name_plural = 'Images'
+
+    def __str__(self):
+        return self.url
