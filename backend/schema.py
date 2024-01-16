@@ -91,9 +91,20 @@ class Query(graphene.ObjectType):
     )
 
     places = graphene.List(PlaceType)
+
     place_by_id = graphene.Field(
         PlaceType,
         id=graphene.ID()
+    )
+
+    places_by_name = graphene.Field(
+        graphene.List(PlaceType),
+        name=graphene.String()
+    )
+
+    places_startWith_name = graphene.Field(
+        graphene.List(PlaceType),
+        name=graphene.String()
     )
 
     s3_presigned_url = generic.GenericScalar()
@@ -152,6 +163,14 @@ class Query(graphene.ObjectType):
     def resolve_place_by_id(root, info, id):
         # Querying a list
         return Place.objects.get(pk=id)
+    
+    def resolve_places_by_name(root, info, name):
+        # Querying a list
+        return Place.objects.filter(name=name)
+    
+    def resolve_places_startWith_name(root, info, name):
+        # Querying a list
+        return Place.objects.filter(name__startswith=name)
     
     def resolve_s3_presigned_url(root, info):
         print("Creating Boto3 client for S3 manipulations")
