@@ -35,7 +35,7 @@ class Address(models.Model):
     addressString = models.CharField(unique=True, max_length=255)
     location = models.PointField()
     
-    def save(self, *args, **kwargs):
+    def save(self, *args,omit_geocode,**kwargs):
         validated = True
         validation_message = ''
         try: 
@@ -43,7 +43,7 @@ class Address(models.Model):
             validated = False
             validation_message = "Address already exists!"
         except Exception as e:
-            print("Check address exists: ", e)
+            print("Address already exists: ", e)
             
         if (not validated):
             raise ValidationError(
@@ -51,17 +51,21 @@ class Address(models.Model):
                 params={'value': check},
             )
         
-        geolocator = Nominatim(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0")
-        location = geolocator.geocode(self.addressString)
-        if location is not None and hasattr(location, 'latitude') and hasattr(location, 'longitude'):
-            self.location = geos.Point((location.longitude, location.latitude)) 
-            print("Address is resolved to ", self.location, location)
-        else:
-            raise ValidationError(
-                ('The address cannot be resolved'),
-                params={'value': self.addressString},
-            )
+        if not omit_geocode:
+            print("Trying to resolve {} by geocode".format(self.addressString))
+            geolocator = Nominatim(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0")
+            location = geolocator.geocode(self.addressString)
+            if location is not None and hasattr(location, 'latitude') and hasattr(location, 'longitude'):
+                self.location = geos.Point((location.longitude, location.latitude)) 
+                print("Address is resolved to ", self.location, location)
+            else:
+                raise ValidationError(
+                    ('The address cannot be resolved'),
+                    params={'value': self.addressString},
+                )
+        print("Saving address with the following params:")
+        print(kwargs)
         return super(Address, self).save(*args, **kwargs)
 
     def __str__(self):

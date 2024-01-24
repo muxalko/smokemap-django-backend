@@ -22,11 +22,12 @@ if os.getenv('SETTINGS_MODE') == 'local':
     GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
     # SECURITY WARNING: don't run with debug turned on in production!
     DEBUG = True
-    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '192.168.56.5']
+    ALLOWED_HOSTS = ['*']
     CORS_ALLOWED_ORIGINS = [
         'http://127.0.0.1:3000',
         'http://localhost:3000',
         'http://192.168.56.5:3000',
+        'http://10.0.0.44:3000',
     ]
 else:
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
@@ -35,11 +36,8 @@ else:
     GDAL_LIBRARY_PATH = "libgdal.so"
     GEOS_LIBRARY_PATH = "libgeos_c.so.1"
     DEBUG = False
-    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '192.168.56.5','.vercel.app']
+    ALLOWED_HOSTS = ['.vercel.app']
     CORS_ALLOWED_ORIGINS = [
-        # for local development
-        'http://127.0.0.1:3000',
-        'http://localhost:3000',
         # vercel production - main branch
         'https://smokemap.vercel.app',
         'https://smokemap-webapp-muxalko.vercel.app',

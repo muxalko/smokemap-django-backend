@@ -9,7 +9,7 @@ from graphene_file_upload.scalars import Upload
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from graphene.types import generic
-
+from django.contrib.gis import geos
 from django.conf import settings
 # import logging
 import boto3
@@ -309,48 +309,66 @@ class CreateRequest(graphene.Mutation):
         validation_message = ''
 
         myaddress = Address()
-        # check if address already exists, if not save as new
-        try:
-            myaddress = Address.objects.get(addressString=input.address_string)
-            # if an address already in the database,
-            # there are chances that there is a request or place share the same address and can indicate a duplicate
-            # We only allow different place names per one address
-            # Try to find request with the same name
-            # we should not find any, hence Exception is a good exit
+        
+        nonAddressMode = False
+        # for NonAddressMode we will check the addressString for an array of numbers
+        # it will be sent in the following format: [lng,lat]
+        if input.address_string.startswith('[') and input.address_string.endswith(']'):
+            print("Found coordinates in the address string, trying to parse it")
+            nonAddressMode = True
+            tmp = input.address_string[1:][:-1]
+            print(" - raw string",tmp)
+            coordinates = tmp.split(',')
+            print(" - converted to array", coordinates)
+            myaddress.addressString = "CustomAddress_{}_{}_{}".format(input.name,coordinates[0],coordinates[1])
+            myaddress.location = geos.Point((float(coordinates[0]),float(coordinates[1])))
+            print("Saving {}".format(myaddress.location))
+            myaddress.save(omit_geocode=True)
+
+
+        if not nonAddressMode:
+            # check if address already exists, if not save as new
             try:
-                request = Request.objects.filter(name=input.name, address=myaddress)
-                if (len(request) > 0):
-                    print("FOUND DUPLICATE REQUEST !!!")
-                    print("Found request(s): ", request)
-                    validated = False
-                    validation_message = "There is already an {} request with the same name.".format("approved" if request[0].approved else "unapproved")
-            except Exception as request_e:
-                print("Validation of Request is OK: ", request_e)
-            
-            # In case requests were deleted lets check if that same place already exists
-            # we should not find any, hence Exception is a good exit
-            try:
-                place = Place.objects.get(name=input.name, address=myaddress)
-                if (len(place) > 0):
-                    print("FOUND DUPLICATE PLACE !!!")
-                    print("Found place(s): ", place)
-                    validated = False
-                    validation_message = 'There is already a place with the same name and address.'
-            except Exception as place_e:
-                print("Validation of Place is OK: ", place_e)
+                myaddress = Address.objects.get(addressString=input.address_string)
+                # if an address already in the database,
+                # there are chances that there is a request or place share the same address and can indicate a duplicate
+                # We only allow different place names per one address
+                # Try to find request with the same name
+                # we should not find any, hence Exception is a good exit
+                try:
+                    request = Request.objects.filter(name=input.name, address=myaddress)
+                    if (len(request) > 0):
+                        print("FOUND DUPLICATE REQUEST !!!")
+                        print("Found request(s): ", request)
+                        validated = False
+                        validation_message = "There is already an {} request with the same name.".format("approved" if request[0].approved else "unapproved")
+                except Exception as request_e:
+                    print("Validation of Request is OK: ", request_e)
+                
+                # In case requests were deleted lets check if that same place already exists
+                # we should not find any, hence Exception is a good exit
+                try:
+                    place = Place.objects.get(name=input.name, address=myaddress)
+                    if (len(place) > 0):
+                        print("FOUND DUPLICATE PLACE !!!")
+                        print("Found place(s): ", place)
+                        validated = False
+                        validation_message = 'There is already a place with the same name and address.'
+                except Exception as place_e:
+                    print("Validation of Place is OK: ", place_e)
 
-        except Exception as myaddress_e:
-            print(myaddress_e)
-            myaddress.addressString = input.address_string
-            myaddress.save()
-            print("New address was created: ", myaddress)
+            except Exception as myaddress_e:
+                print(myaddress_e)
+                myaddress.addressString = input.address_string
+                myaddress.save()
+                print("New address was created: ", myaddress)
 
 
-        if (not validated):
-                raise ValidationError(
-                    (validation_message),
-                    params={'value': request},
-                )
+            if (not validated):
+                    raise ValidationError(
+                        (validation_message),
+                        params={'value': request},
+                    )
         
         try:
             category = Category.objects.get(pk=input.category)
