@@ -99,6 +99,30 @@ python manage.py runserver
 
 Your Django application is now available at `http://localhost:8000`.
 
+## Running inside VM
+
+```bash
+SETTINGS_MODE='local' python manage.py runserver 0.0.0.0:8000
+
+DEVELOPMENT MODE !!! - Hello from 75897
+GDAL_LIBRARY_PATH=/usr/lib/libgdal.so.26
+GEOS_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libgeos_c.so.1
+DEVELOPMENT MODE !!! - Hello from 75898
+GDAL_LIBRARY_PATH=/usr/lib/libgdal.so.26
+GEOS_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libgeos_c.so.1
+Watching for file changes with StatReloader
+Performing system checks...
+
+System check identified no issues (0 silenced).
+January 24, 2024 - 20:58:47
+Django version 4.2.8, using settings 'smokemap.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+```
+
+The environment variable ```SETTINGS_MODE``` is set to "local" to indicate development mode, used in settings.py 
+
 ## One-Click Deploy
 
 Deploy the example using [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=vercel-examples):
