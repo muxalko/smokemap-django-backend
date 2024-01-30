@@ -92,6 +92,8 @@ class Query(graphene.ObjectType):
 
     places = graphene.List(PlaceType)
 
+    places_names = graphene.List(graphene.String)
+
     place_by_id = graphene.Field(
         PlaceType,
         id=graphene.ID()
@@ -159,6 +161,10 @@ class Query(graphene.ObjectType):
     def resolve_places(root, info):
         # Querying a list
         return Place.objects.all()
+    
+    def resolve_places_names(root, info):
+        # Querying a list
+        return Place.objects.all().values_list("name", flat=True)
     
     def resolve_place_by_id(root, info, id):
         # Querying a list
