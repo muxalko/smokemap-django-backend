@@ -17,6 +17,7 @@ dj-rest-auth = "*"
 psycopg2-binary = "*"
 geopy = "*"
 django-filter = "*"
+urllib3 = "==1.26.18"
 
 [dev-packages]
 
