@@ -21,9 +21,13 @@
 # echo "-----------"
 #find / -name libproj.so.22
 echo "BUILD START"
-# show how much space was used so far
+
+echo "running df -h"
 df -h
+echo "---------"
+echo "running du -h"
 du -h / -d1
+echo "---------"
 
 # set location for GDAL dependency files
 export LD_LIBRARY_PATH="$(pwd)/.vercel/builders/node_modules/vercel-python-gis/dist/files/"
@@ -41,21 +45,20 @@ python -m pip install --upgrade pip
 echo "Building the project..."
 python -m pip install -r requirements.txt
 
-# show how much space was used so far
+echo "running df -h"
 df -h
-du -h / -d1
+echo "---------"
+echo "running du -h -d2"
+du -h / -d2
+echo "---------"
 
 # Make migrations
 echo "Making migrations..."
 python manage.py makemigrations --noinput
 python manage.py migrate --noinput
 
-# Collect static files
-echo "Collecting static files..."
-python manage.py collectstatic --noinput --clear
-
-# show how much space was used so far
-df -h
-du -h / -d1
+# Collect static  (only in development - for admin module)
+# echo "Collecting static files..."
+# python manage.py collectstatic --noinput --clear
 
 echo "BUILD END"
