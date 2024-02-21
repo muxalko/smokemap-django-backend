@@ -38,6 +38,10 @@ python -m pip install --upgrade pip
 echo "Building the project..."
 python -m pip install -r requirements.txt
 
+# show how much space was used so far
+df -h
+du -h / -d1
+
 # Make migrations
 echo "Making migrations..."
 python manage.py makemigrations --noinput
@@ -47,5 +51,8 @@ python manage.py migrate --noinput
 echo "Collecting static files..."
 python manage.py collectstatic --noinput --clear
 
+# show how much space was used so far
+df -h
+du -h / -d1
 
 echo "BUILD END"
