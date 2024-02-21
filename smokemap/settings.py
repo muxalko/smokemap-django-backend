@@ -77,6 +77,7 @@ if os.getenv('SETTINGS_MODE') == 'local':
     }
 
 else:
+
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
     #GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
     #GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
@@ -96,8 +97,18 @@ else:
     #     r"muxalko\.vercel\.app$",
     # ]
 
+    CORS_ALLOW_HEADERS = ['x-csrftoken','content-type']
+
+    CORS_ALLOW_CREDENTIALS = True
+
+    CORS_ALLOWED_ORIGINS = [
+        'https://smokemap.vercel.app',
+        'https://smokemap-webapp-git-staging-muxalko.vercel.app'
+    ]
+
     CSRF_TRUSTED_ORIGINS = [
         'https://smokemap.vercel.app',
+        'https://smokemap-webapp-git-staging-muxalko.vercel.app'
     ]
 
     SIMPLE_JWT = {
