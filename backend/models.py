@@ -4,8 +4,45 @@ from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.gis import geos
-
+from django.utils import timezone
+from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
+from .managers import CustomUserManager
 # Create your models here.
+
+# https://docs.djangoproject.com/en/5.0/topics/auth/customizing/#custom-users-and-proxy-models
+# AbstractUser vs AbstractBaseUser
+# The default user model in Django uses a username to uniquely identify a user during authentication. If you'd rather use an email address, you'll need to create a custom user model by either subclassing AbstractUser or AbstractBaseUser.
+
+# Options:
+
+# AbstractUser: Use this option if you are happy with the existing fields on the user model and just want to remove the username field.
+# AbstractBaseUser: Use this option if you want to start from scratch by creating your own, completely new user model.
+
+# This model behaves identically to the default user model, but you’ll be able to customize it in the future if the need arises:
+# https://docs.djangoproject.com/en/5.0/topics/auth/customizing/#using-a-custom-user-model-when-starting-a-project
+# class User(AbstractUser):
+#     pass
+
+# Created a new class called CustomUser that subclasses AbstractBaseUser
+# Removed the username field
+# Made the email field required and unique
+# Set the USERNAME_FIELD -- which defines the unique identifier for the User model -- to email
+# Specified that all objects for the class come from the CustomUserManager
+class CustomUser(AbstractBaseUser, PermissionsMixin):
+    name = models.CharField(max_length=25, default='visitor')
+    image = models.CharField(max_length=255, default='/guest.svg')
+    email = models.EmailField(unique=True)
+    is_staff = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    date_joined = models.DateTimeField(default=timezone.now)
+
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = []
+
+    objects = CustomUserManager()
+
+    def __str__(self):
+        return self.email 
 
 
 class Category(models.Model):
@@ -35,7 +72,7 @@ class Address(models.Model):
     addressString = models.CharField(unique=True, max_length=255)
     location = models.PointField()
     
-    def save(self, *args,omit_geocode,**kwargs):
+    def save(self, *args, omit_geocode = False, **kwargs):
         validated = True
         validation_message = ''
         try: 
@@ -95,7 +132,7 @@ class Request(models.Model):
     approved_comment = models.TextField(blank=True, null=True)
     approved_by = models.CharField(
         auto_created=True, blank=True, null=True, max_length=100)
-
+    requested_by = models.CharField(max_length=255, null=True)
     # images_set_id = models.CharField(blank=True, null=True, max_length=255)
     # the item belongs to one category
     # if having a category is required please remove blank=True
