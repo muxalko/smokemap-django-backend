@@ -229,6 +229,11 @@ elif os.getenv("$VERCEL_GIT_COMMIT_REF") == 'main':
         'JWT_COOKIE_SAMESITE': 'Lax'
     }
 
+else:
+    print("Unrecognized environment, quitting...")
+    quit
+
+    
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
 print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
 
