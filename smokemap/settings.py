@@ -76,7 +76,7 @@ if os.getenv('SETTINGS_MODE') == 'local':
         ],
     }
 # try to detect vercel environment
-elif os.getenv("$VERCEL_GIT_COMMIT_REF") == 'staging':
+elif os.getenv("VERCEL_GIT_COMMIT_REF") == 'staging':
     print("STAGING MODE !!! - Hello from " + str(os.getpid()))
     #GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
     #GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
@@ -152,7 +152,7 @@ elif os.getenv("$VERCEL_GIT_COMMIT_REF") == 'staging':
         'JWT_COOKIE_SAMESITE': 'Lax'
     }
 
-elif os.getenv("$VERCEL_GIT_COMMIT_REF") == 'main':
+elif os.getenv("VERCEL_GIT_COMMIT_REF") == 'main':
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
     #GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
     #GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
@@ -231,9 +231,9 @@ elif os.getenv("$VERCEL_GIT_COMMIT_REF") == 'main':
 
 else:
     print("Unrecognized environment, quitting...")
-    quit
+    quit()
 
-    
+
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
 print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
 
