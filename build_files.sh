@@ -21,6 +21,9 @@
 # echo "-----------"
 #find / -name libproj.so.22
 echo "BUILD START"
+# show how much space was used so far
+df -h
+du -h / -d1
 
 # set location for GDAL dependency files
 export LD_LIBRARY_PATH="$(pwd)/.vercel/builders/node_modules/vercel-python-gis/dist/files/"
