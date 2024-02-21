@@ -1,13 +1,14 @@
 import graphene
+import graphql_jwt
 from graphene_django import DjangoObjectType
 from .models import Category, Tag, Request, Address, Place, Image
 from django.core.exceptions import ValidationError
 import graphql_geojson
 from django.utils import timezone
-# from django.contrib.gis import geos
-from graphene_file_upload.scalars import Upload
-from django.core.files.storage import default_storage
-from django.core.files.base import ContentFile
+
+# from graphene_file_upload.scalars import Upload
+# from django.core.files.storage import default_storage
+# from django.core.files.base import ContentFile
 from graphene.types import generic
 from django.contrib.gis import geos
 from django.conf import settings
@@ -16,6 +17,33 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from django.core.management.utils import get_random_string
+from .models import CustomUser
+from django.contrib.auth.models import Group
+from graphql_jwt.decorators import login_required
+
+##################################TYPES###############################
+class UserType(DjangoObjectType):
+
+    # if user is in admins group his role will be 'admin' otherwise 'visitor'
+    # that is returned in web client for authorzation of users
+    role = graphene.String()
+    def resolve_role(self, info):
+        customUser = CustomUser.objects.get(email=self)
+        groups = Group.objects.filter(user=customUser)
+        print("groups",groups)
+        # wrap in list(), because QuerySet is not JSON serializable
+        isAdmin = False 
+        for group in groups:
+            if group.name == "admins":
+                isAdmin = True
+        if isAdmin:
+            return 'admin'
+        else:
+            return 'guest'
+    
+    class Meta:
+        model = CustomUser
+        fields = ('name', 'image', 'email', 'role')
 
 class PlaceType(DjangoObjectType):
     class Meta:
@@ -26,6 +54,13 @@ class CategoryType(DjangoObjectType):
     class Meta:
         model = Category
         fields = ('id', 'name', 'description')
+    
+    # @classmethod
+    # def get_queryset(cls, queryset, info):
+    #     print("CategoryType.info.context.user:",info.context.user)
+    #     if info.context.user.is_anonymous:
+    #         return queryset.filter(published=True)
+    #     return queryset
 
 class TagType(DjangoObjectType):
     class Meta:
@@ -68,7 +103,33 @@ class RequestType(DjangoObjectType):
             'approved',
             'approved_by',
             'approved_comment',
+            'requested_by'
         )
+# TODO: make all methods use **kwargs to use decorator
+##############################DECORATORS##############################
+def anonymous_return(value):
+    def anonymous_return_decorator(func):
+        def anonymous_return_wrapper(obj, info, **kwargs):
+            if not info.context.user.is_authenticated:
+                if callable(value):
+                    return value()
+                return value
+            return func(obj, info, **kwargs)
+        return anonymous_return_wrapper
+    return anonymous_return_decorator
+
+###############################ERRORS##################################
+class AuthenticationRequired(graphene.ObjectType):
+    message = graphene.String(
+        required=True,
+    )
+
+    @staticmethod
+    def default_message():
+        return AuthenticationRequired(
+            message="You must be logged in to perform this action"
+        )
+#################################QUERIES###############################
 
 class Query(graphene.ObjectType):
     categories = graphene.List(CategoryType)
@@ -109,7 +170,9 @@ class Query(graphene.ObjectType):
         name=graphene.String()
     )
 
-    s3_presigned_url = generic.GenericScalar()
+    s3_presigned_url = generic.GenericScalar(
+        # image_type=graphene.String()
+        )
     # s3_presigned_url = graphene.Field(
     #     url=graphene.String(),
     #     fields=graphene.Field(
@@ -142,19 +205,31 @@ class Query(graphene.ObjectType):
     #     # Querying a list
     #     return Image.objects.filter(set_id=set_id)
 
-    def resolve_requests(root, info):
-        # Querying a list
-        return Request.objects.all()
+    # @anonymous_return(AuthenticationRequired.default_message)
+    # def resolve_requests(root, info):
+    #     # Querying a list
+    #     return Request.objects.all()
 
+    # @login_required
     def resolve_requests_to_approve(root, info, **kwargs):
+        # print("context:",vars(info.context))
+        print("headers:",info.context.headers)
+
+        # print("csrf token:",info.context.headers['X-Csrftoken'])
+        if not info.context.user.is_authenticated:
+            raise ValidationError(("You must be logged in to perform this action"),)
         # Querying a list
         return Request.objects.filter(approved=False)
 
     def resolve_request_by_id(root, info, id):
+        if not info.context.user.is_authenticated:
+            raise ValidationError(("You must be logged in to perform this action"),)
         # Querying a request
         return Request.objects.get(pk=id)
 
     def resolve_requests_by_name(root, info, name):
+        if not info.context.user.is_authenticated:
+            raise ValidationError(("You must be logged in to perform this action"),)
         # Querying a named
         return Request.objects.filter(name=name)
 
@@ -188,15 +263,24 @@ class Query(graphene.ObjectType):
         
         object_name = get_random_string(length=16, allowed_chars='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
         print ("Generated name for S3 upload object", object_name)
+        
         try:
             response = s3_client.generate_presigned_post(settings.AWS_STORAGE_BUCKET_NAME,
                                                         # object_name,
                                                         # ${filename} will be supplied by the client
                                                         object_name+"/${filename}",
                                                         # "uploads/${filename}",
-                                                        Fields=None,
+                                                        # Fields=None,
+                                                        Fields = {"Content-Type": "image/jpeg"},
+                                                        # Fields = {"acl": "public-read", "Content-Type": "image/jpeg"},
+                                                        # Fields={"Content-Type": "image/{}".format(image_type)},
                                                         # Conditions=None,
-                                                        Conditions=[["starts-with", "$key", object_name+"/"]],
+                                                        Conditions=[
+                                                            # {"acl": "public-read" },
+                                                            {"bucket": settings.AWS_STORAGE_BUCKET_NAME },
+                                                            ["starts-with", "$key", object_name+"/"],
+                                                            ["starts-with", "$Content-Type", "image/"]
+                                                            ],
                                                         # Conditions=[["starts-with", "$key", "uploads/"]],
                                                         ExpiresIn=60)
         except ClientError as e:
@@ -207,91 +291,93 @@ class Query(graphene.ObjectType):
        
         return response
        
-      
-class CreatePlace(graphene.Mutation):
-    place = graphene.Field(PlaceType)
+################################MUTATIONS###############################
+# @anonymous_return(AuthenticationRequired.default_message)
+# class CreatePlace(graphene.Mutation):
+#     place = graphene.Field(PlaceType)
 
-    class Arguments:
-        name = graphene.String(required=True)
-        category = graphene.Int(required=False)
-        description = graphene.String(required=False)
-        # location = graphql_geojson.Geometry(required=True)
-        address = graphene.Field(AddressType)
-        tags = graphene.List(TagType, required=False)
+#     class Arguments:
+#         name = graphene.String(required=True)
+#         category = graphene.Int(required=False)
+#         description = graphene.String(required=False)
+#         # location = graphql_geojson.Geometry(required=True)
+#         address = graphene.Field(AddressType)
+#         tags = graphene.List(TagType, required=False)
 
-    @classmethod
-    def mutate(cls, root, info, **args):
-        place = Place.objects.create(**args)
-        return cls(place=place)
+#     @classmethod
+#     def mutate(cls, root, info, **args):
+#         place = Place.objects.create(**args)
+#         return cls(place=place)
 
-class UpdateCategory(graphene.Mutation):
-    class Arguments:
-        # Mutation to update a category
-        description = graphene.String(required=False)
-        name = graphene.String(required=False)
-        id = graphene.ID()
+#@anonymous_return(AuthenticationRequired.default_message)
+# class UpdateCategory(graphene.Mutation):
+#     class Arguments:
+#         # Mutation to update a category
+#         description = graphene.String(required=False)
+#         name = graphene.String(required=False)
+#         id = graphene.ID()
 
-    category = graphene.Field(CategoryType)
+#     category = graphene.Field(CategoryType)
 
-    @classmethod
-    def mutate(cls, root, info, id, name, description):
-        category = Category.objects.get(pk=id)
-        category.name = name
-        category.description = description
-        category.save()
+#     @classmethod
+#     def mutate(cls, root, info, id, name, description):
+#         category = Category.objects.get(pk=id)
+#         category.name = name
+#         category.description = description
+#         category.save()
 
-        return UpdateCategory(category=category)
+#         return UpdateCategory(category=category)
+
+# @anonymous_return(AuthenticationRequired.default_message)
+# class CreateCategory(graphene.Mutation):
+#     class Arguments:
+#         # Mutation to create a category
+#         name = graphene.String(required=True)
+#         description = graphene.String(required=False)
 
 
-class CreateCategory(graphene.Mutation):
-    class Arguments:
-        # Mutation to create a category
-        name = graphene.String(required=True)
-        description = graphene.String(required=False)
+#     # Class attributes define the response of the mutation
+#     category = graphene.Field(CategoryType)
 
+#     @classmethod
+#     def mutate(cls, root, info, name, description):
+#         category = Category()
+#         category.name = name
+#         category.description = description
+#         category.save()
 
-    # Class attributes define the response of the mutation
-    category = graphene.Field(CategoryType)
+#         return CreateCategory(category=category)
 
-    @classmethod
-    def mutate(cls, root, info, name, description):
-        category = Category()
-        category.name = name
-        category.description = description
-        category.save()
+# class UploadFile(graphene.Mutation):
+#     class Arguments:
+#         file = Upload(required=True)
 
-        return CreateCategory(category=category)
+#     success = graphene.Boolean()
 
-class UploadFile(graphene.Mutation):
-    class Arguments:
-        file = Upload(required=True)
+#     def mutate(self, info, file, **kwargs):
+#         print("Filename: ", file)
+#         print(f'File Size in Bytes is {file.size}')
+#         #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
+#         path = default_storage.save(file, ContentFile(file.read()))
+#         print("Saved to ", path)
 
-    success = graphene.Boolean()
+#         return UploadFile(success=True)
 
-    def mutate(self, info, file, **kwargs):
-        print("Filename: ", file)
-        print(f'File Size in Bytes is {file.size}')
-        #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
-        path = default_storage.save(file, ContentFile(file.read()))
-        print("Saved to ", path)
+# class UploadFiles(graphene.Mutation):
+#     class Arguments:
+#         files = graphene.List(Upload)
 
-        return UploadFile(success=True)
+#     success = graphene.Boolean()
 
-class UploadFiles(graphene.Mutation):
-    class Arguments:
-        files = graphene.List(Upload)
+#     def mutate(self, info, files, **kwargs):
+#         for file in files:
+#             print("Filename: ", file)
+#             print(f'File Size in Bytes is {file.size}')
+#             #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
+#             path = default_storage.save(file, ContentFile(file.read()))
+#             print("Saved to ", path)
 
-    success = graphene.Boolean()
-
-    def mutate(self, info, files, **kwargs):
-        for file in files:
-            print("Filename: ", file)
-            print(f'File Size in Bytes is {file.size}')
-            #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
-            path = default_storage.save(file, ContentFile(file.read()))
-            print("Saved to ", path)
-
-        return UploadFiles(success=True)
+#         return UploadFiles(success=True)
 
 class RequestInput(graphene.InputObjectType):
     name = graphene.String()
@@ -310,6 +396,7 @@ class CreateRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input):
+        print("CreateRequest", dir(info.context.META))
         # apply validation steps
         validated = True
         validation_message = ''
@@ -393,10 +480,12 @@ class CreateRequest(graphene.Mutation):
             request.description = input.description
             request.tags = input.tags
             request.address = myaddress
+            request.requested_by = info.context.META.get('HTTP_X_FORWARDED_FOR', info.context.META.get('REMOTE_ADDR', '')).split(',')[0].strip()
+        
             # request.imageurl = input.imageurl
 
-            print("Request(Category:{}, Name: {}, Desc: {}, Address: {}, Tags: {})".format(
-                request.category, request.name, request.description, request.address, request.tags))
+            print("Request(Category:{}, Name: {}, Desc: {}, Address: {}, Tags: {}, Requested by :{})".format(
+                request.category, request.name, request.description, request.address, request.tags, request.requested_by))
             request.save()
 
         # if len(input.images) > 1:
@@ -408,28 +497,30 @@ class CreateRequest(graphene.Mutation):
 
         return CreateRequest(request=request)
 
-class UpdateRequest(graphene.Mutation):
-    class Arguments:
-        input = RequestInput(required=True)
-        id = graphene.ID()
 
-    request = graphene.Field(RequestType)
+# class UpdateRequest(graphene.Mutation):
+#     class Arguments:
+#         input = RequestInput(required=True)
+#         id = graphene.ID()
 
-    @classmethod
-    def mutate(cls, root, info, input, id):
-        request = Request.objects.get(pk=id)
-        request.name = input.name
-        request.description = input.description
-        request.address = input.address
-        # request.imageurl = input.imageurl
-        request.date_created = input.date_created
-        request.date_approved = input.date_approved
-        request.approved = input.approved
-        # request.category = input.category
-        # request.tags = input.tags
+#     request = graphene.Field(RequestType)
 
-        request.save()
-        return UpdateRequest(request=request)
+#     @classmethod
+#     def mutate(cls, root, info, input, id):
+#         request = Request.objects.get(pk=id)
+#         request.name = input.name
+#         request.description = input.description
+#         request.address = input.address
+#         # request.imageurl = input.imageurl
+#         request.date_created = input.date_created
+#         request.date_approved = input.date_approved
+#         request.approved = input.approved
+#         # request.category = input.category
+#         # request.tags = input.tags
+
+#         request.save()
+#         return UpdateRequest(request=request)
+
 
 class DeleteRequest(graphene.Mutation):
     ok = graphene.Boolean()
@@ -439,6 +530,8 @@ class DeleteRequest(graphene.Mutation):
 
     @classmethod
     def mutate(cls, root, info, id):
+        if not info.context.user.is_authenticated:
+            raise ValidationError(("You must be logged in to perform this action"),)
         request = Request.objects.get(pk=id)
 
         request.delete()
@@ -448,6 +541,7 @@ class DeleteRequest(graphene.Mutation):
 class RequestApproveInput(graphene.InputObjectType):
     approved_comment = graphene.String()
     approved_by = graphene.String()
+
 
 class ApproveRequest(graphene.Mutation):
 
@@ -459,6 +553,8 @@ class ApproveRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input, id):
+        if not info.context.user.is_authenticated:
+            raise ValidationError(("You must be logged in to perform this action"),)
         print("Start approval process for request id=", id)
          # apply validation steps
         validated = True
@@ -585,16 +681,30 @@ class CreateImage(graphene.Mutation):
 
         return cls(image=image)
 
+
+class ObtainJSONWebToken(graphql_jwt.JSONWebTokenMutation):
+    user = graphene.Field(UserType)
+
+    @classmethod
+    def resolve(cls, root, info, **kwargs):
+        print("context user:", info.context.user)
+        return cls(user=info.context.user)
+    
 class Mutation(graphene.ObjectType):
-    update_category = UpdateCategory.Field()
-    create_category = CreateCategory.Field()
+    token_auth = ObtainJSONWebToken.Field()
+    verify_token = graphql_jwt.Verify.Field()
+    refresh_token = graphql_jwt.Refresh.Field()
+    revoke_token = graphql_jwt.Revoke.Field()
+    # delete_refresh_token_cookie = graphql_jwt.refresh_token.DeleteRefreshTokenCookie.Field()
+    # update_category = UpdateCategory.Field()
+    # create_category = CreateCategory.Field()
     create_request = CreateRequest.Field()
     create_image = CreateImage.Field()
-    update_request = UpdateRequest.Field()
+    # update_request = UpdateRequest.Field()
     # update_request_images_set_id = UpdateRequesImagesSetId.Field()
     approve_request = ApproveRequest.Field()
     delete_request = DeleteRequest.Field()
-    upload_file = UploadFile.Field()
-    upload_files = UploadFiles.Field()
+    # upload_file = UploadFile.Field()
+    # upload_files = UploadFiles.Field()
 
 schema = graphene.Schema(query=Query, mutation=Mutation)

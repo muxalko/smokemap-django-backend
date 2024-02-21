@@ -9,9 +9,12 @@ https://docs.djangoproject.com/en/4.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
-
+from datetime import timedelta
 from pathlib import Path
 import os
+# load .env
+from dotenv import load_dotenv
+load_dotenv()
 
 # set gdal library path for django to find it
 from glob import glob
@@ -22,13 +25,57 @@ if os.getenv('SETTINGS_MODE') == 'local':
     GEOS_LIBRARY_PATH=glob('/usr/lib/x86_64-linux-gnu/libgeos_c.so.*')[0]
     # SECURITY WARNING: don't run with debug turned on in production!
     DEBUG = True
-    ALLOWED_HOSTS = ['*']
+    # ALLOWED_HOSTS=['*']
+    CORS_ALLOW_HEADERS = ['x-csrftoken','content-type']
+    # CORS_ORIGIN_ALLOW_ALL = True
+    CORS_ALLOW_CREDENTIALS = True
+    ALLOWED_HOSTS = [
+        'localhost', # retrieve schema wwhen developing
+        'smokemap.org'
+        ]
     CORS_ALLOWED_ORIGINS = [
-        'http://127.0.0.1:3000',
-        'http://localhost:3000',
-        'http://192.168.56.5:3000',
-        'http://10.0.0.44:3000',
+        "http://localhost:3000",
+        'http://smokemap.org:3000'
     ]
+    CSRF_TRUSTED_ORIGINS = [
+        'http://smokemap.org:3000',
+    ]
+
+    # used with allauth/dj-rest-auth
+    SIMPLE_JWT = {
+        "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+        "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+        "ROTATE_REFRESH_TOKENS": False,
+        "BLACKLIST_AFTER_ROTATION": False,
+        "UPDATE_LAST_LOGIN": True,
+        "SIGNING_KEY": "complexsigningkey",  # generate a key and replace me
+        "ALGORITHM": "HS512",
+    }
+
+    # used with graphene auth
+    # Defines JWT settings and auth backends
+    GRAPHQL_JWT = {
+        # 'JWT_PAYLOAD_HANDLER': 'app.utils.jwt_payload',
+        'JWT_AUTH_HEADER_PREFIX': 'Bearer',
+        'JWT_VERIFY_EXPIRATION': True,
+        'JWT_LONG_RUNNING_REFRESH_TOKEN': True,
+        'JWT_EXPIRATION_DELTA': timedelta(minutes=5),
+        'JWT_REFRESH_EXPIRATION_DELTA': timedelta(days=7),    
+        'JWT_SECRET_KEY': os.environ['DJANGO_SECRET_KEY'],
+        'JWT_ALGORITHM': 'HS256',
+        'JWT_COOKIE_SECURE': False,
+        # 'JWT_COOKIE_DOMAIN': 'smokemap.org',
+        'JWT_COOKIE_SAMESITE': 'Lax'
+    }
+
+    # Graphql settings
+    GRAPHENE = {
+        "SCHEMA": "backend.schema.schema",
+        "MIDDLEWARE": [
+            "graphql_jwt.middleware.JSONWebTokenMiddleware",
+        ],
+    }
+
 else:
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
     #GDAL_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgdal.so"
@@ -49,11 +96,32 @@ else:
     #     r"muxalko\.vercel\.app$",
     # ]
 
+    CSRF_TRUSTED_ORIGINS = [
+        'https://smokemap.vercel.app',
+    ]
+
+    SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "UPDATE_LAST_LOGIN": True,
+    "SIGNING_KEY": "complexsigningkey",  # generate a key and replace me
+    "ALGORITHM": "HS512",
+    }
+
+    # Graphql settings
+    GRAPHENE = {
+        "SCHEMA": "backend.schema.schema",
+        "RELAY_CONNECTION_MAX_LIMIT": 100,
+        'MIDDLEWARE': [
+            'backend.graphql.middleware.DisableIntrospectionMiddleware',
+        ],
+    }
+
+
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
 print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
-# load .env
-from dotenv import load_dotenv
-load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -73,31 +141,42 @@ AWS_S3_REGION_NAME = os.environ.get('AWS_REGION','')
 
 # Application definition
 INSTALLED_APPS = [
+    "django.contrib.sites", #django-allauth depends on Django's "sites" framework
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles', # Required for GraphiQL
-    'corsheaders',
-    'graphene_django',
-    'rest_framework',
-    'rest_framework_gis',
-    'django.contrib.gis',
+    'corsheaders', # CORS support
+    'graphene_django', # graphql
+    'graphql_jwt.refresh_token.apps.RefreshTokenConfig',
+    'rest_framework', # Django Rest Framework
+    'rest_framework.authtoken', # Token authentication
+    'rest_framework_simplejwt', # JSON Web 
+    'rest_framework_gis', # Geo addition
+    'django.contrib.gis', # 
     # 'django_tiles_gl',
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",  # add if you want social authentication
+    "allauth.socialaccount.providers.google",
+    "dj_rest_auth",
+    "dj_rest_auth.registration",
+    # our application
     'backend',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.common.CommonMiddleware',
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = 'smokemap.urls'
@@ -198,6 +277,105 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles_build', 'static')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-GRAPHENE = {
-    "SCHEMA": "backend.schema.schema"
+
+
+# User settings
+AUTH_USER_MODEL = "backend.CustomUser"
+ACCOUNT_ADAPTER = 'backend.adapter.CustomAccountAdapter'
+
+# used to redirect unauthenticated users 
+LOGIN_URL = '/api-auth/login/'
+
+SITE_ID = 1
+
+ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_EMAIL_VERIFICATION = "none"
+
+REST_AUTH = {
+    # 'LOGIN_SERIALIZER': 'dj_rest_auth.serializers.LoginSerializer',
+    # 'TOKEN_SERIALIZER': 'dj_rest_auth.serializers.TokenSerializer',
+    # 'JWT_SERIALIZER': 'dj_rest_auth.serializers.JWTSerializer',
+    # 'JWT_SERIALIZER_WITH_EXPIRATION': 'dj_rest_auth.serializers.JWTSerializerWithExpiration',
+    # 'JWT_TOKEN_CLAIMS_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
+   
+    # 'USER_DETAILS_SERIALIZER': 'dj_rest_auth.serializers.UserDetailsSerializer',
+     'USER_DETAILS_SERIALIZER': 'backend.serializers.CustomUserDetailsSerializer',
+    
+    # 'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
+    # 'PASSWORD_RESET_SERIALIZER': 'backend.serializers.CustomPasswordResetSerializer',
+    
+    # 'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
+    # 'PASSWORD_CHANGE_SERIALIZER': 'dj_rest_auth.serializers.PasswordChangeSerializer',
+
+    # 'REGISTER_SERIALIZER': 'dj_rest_auth.registration.serializers.RegisterSerializer',
+    # 'REGISTER_SERIALIZER': 'backend.serializers.CustomRegisterSerializer',
+
+    # 'REGISTER_PERMISSION_CLASSES': ('rest_framework.permissions.AllowAny',),
+
+    # 'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',
+    # 'TOKEN_CREATOR': 'dj_rest_auth.utils.default_create_token',
+
+    # 'PASSWORD_RESET_USE_SITES_DOMAIN': False,
+    # 'OLD_PASSWORD_FIELD_ENABLED': False,
+    # 'LOGOUT_ON_PASSWORD_CHANGE': False,
+    # 'SESSION_LOGIN': True,
+    'USE_JWT': True, # to use refresh/verify routes
+
+    # 'JWT_AUTH_COOKIE': None,
+    # 'JWT_AUTH_REFRESH_COOKIE': None,
+    # 'JWT_AUTH_REFRESH_COOKIE_PATH': '/',
+    # 'JWT_AUTH_SECURE': False,
+    'JWT_AUTH_HTTPONLY': False, # refresh_token will not be sent if set to True
+    # 'JWT_AUTH_SAMESITE': 'Lax',
+    'JWT_AUTH_RETURN_EXPIRATION': True,
+    # 'JWT_AUTH_COOKIE_USE_CSRF': False,
+    # 'JWT_AUTH_COOKIE_ENFORCE_CSRF_ON_UNAUTHENTICATED': False,
 }
+
+# DRF Settings
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        #'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+     'DEFAULT_AUTHENTICATION_CLASSES': [
+        # 'rest_framework.authentication.SessionAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
+        # 'rest_framework.authentication.TokenAuthentication',
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
+}
+
+AUTHENTICATION_BACKENDS = [
+    "graphql_jwt.backends.JSONWebTokenBackend",
+    # Needed to login by username in Django admin, regardless of `allauth`
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+    ]
+
+# SOCIALACCOUNT_PROVIDERS = {
+#     "google": {
+#         "APP": {
+#             "client_id": os.environ.get('AUTH_GOOGLE_ID',''),  
+#             "secret": os.environ.get('AUTH_GOOGLE_SECRET',''),        
+#             "key": "",                               # leave empty
+#         },
+#         "SCOPE": [
+#             "profile",
+#             "email",
+#         ],
+#         "AUTH_PARAMS": {
+#             "access_type": "online",
+#         },
+#         "VERIFIED_EMAIL": True,
+#     },
+# }
