@@ -1,12 +1,12 @@
 # backend/views.py
 
 from backend.models import Place, Address #, Category, Tag, Request, Image
-from django.contrib.auth import login, logout, authenticate
+# from django.contrib.auth import login, logout, authenticate
 # from django.contrib.auth.models import User, Group
 # from django.contrib.auth.mixins import LoginRequiredMixin
-from rest_framework import viewsets, permissions, views,  mixins, status, generics
+from rest_framework import viewsets, permissions #, views,  mixins, status, generics
 # from django.contrib.auth.mixins import LoginRequiredMixin
-from backend.serializers import PlaceSerializer, AddressSerializer, LoginSerializer
+from backend.serializers import PlaceSerializer #, AddressSerializer, LoginSerializer
 from rest_framework_gis.filters import InBBoxFilter #, TMSTileFilter
 from rest_framework.response import Response
 
@@ -19,15 +19,15 @@ from rest_framework.response import Response
 # class PrivateGraphQLView(LoginRequiredMixin, GraphQLView):
 #     pass
 
-from dj_rest_auth.registration.views import SocialLoginView
-from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
-from allauth.socialaccount.providers.oauth2.client import OAuth2Client
+# from dj_rest_auth.registration.views import SocialLoginView
+# from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
+# from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 
 
-class GoogleLogin(SocialLoginView):
-    adapter_class = GoogleOAuth2Adapter
-    callback_url = "http://smokemap.org:3000/"
-    client_class = OAuth2Client
+# class GoogleLogin(SocialLoginView):
+#     adapter_class = GoogleOAuth2Adapter
+#     callback_url = "http://smokemap.org:3000/"
+#     client_class = OAuth2Client
 
 
 class PlaceViewSet(viewsets.ModelViewSet):
@@ -80,26 +80,26 @@ class PlaceViewSet(viewsets.ModelViewSet):
 #         visitor = VisitorSerializer(self.request.user)
 #         return Response(data = visitor.data, status=status.HTTP_202_ACCEPTED)
 
-class LoginView(views.APIView):
-    """
-    API endpoint that allows users to login.
-    """
-    # This view should be accessible also for unauthenticated users.
-    permission_classes = (permissions.AllowAny,)
+# class LoginView(views.APIView):
+#     """
+#     API endpoint that allows users to login.
+#     """
+#     # This view should be accessible also for unauthenticated users.
+#     permission_classes = (permissions.AllowAny,)
 
-    def post(self, request, format=None):
-        serializer = LoginSerializer(data=self.request.data,
-            context={ 'request': self.request })
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
-        login(request, user)
-        reply_user = {  'id': user.id,
-                        'name': user.name,
-                        'email': user.email,
-                        'image': '/admin.svg',
-                        'role': 'admin'
-                        }
-        return Response(reply_user, status=status.HTTP_202_ACCEPTED)
+#     def post(self, request, format=None):
+#         serializer = LoginSerializer(data=self.request.data,
+#             context={ 'request': self.request })
+#         serializer.is_valid(raise_exception=True)
+#         user = serializer.validated_data['user']
+#         login(request, user)
+#         reply_user = {  'id': user.id,
+#                         'name': user.name,
+#                         'email': user.email,
+#                         'image': '/admin.svg',
+#                         'role': 'admin'
+#                         }
+#         return Response(reply_user, status=status.HTTP_202_ACCEPTED)
 
 # class LogoutView(views.APIView):
 #     """

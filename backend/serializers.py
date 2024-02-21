@@ -4,50 +4,50 @@ from rest_framework_gis.serializers import GeometrySerializerMethodField
 from backend.models import Place, Address
 from rest_framework_gis.filters import InBBoxFilter
 
-from dj_rest_auth.serializers import UserDetailsSerializer
+# from dj_rest_auth.serializers import UserDetailsSerializer
 
 from django.conf import settings
 
-from allauth.account.adapter import get_adapter
-from allauth.account.utils import setup_user_email
+# from allauth.account.adapter import get_adapter
+# from allauth.account.utils import setup_user_email
 
-from dj_rest_auth.registration.serializers import RegisterSerializer
+# from dj_rest_auth.registration.serializers import RegisterSerializer
 from django.contrib.auth.models import Group
 from django.http import JsonResponse
 from django.contrib.auth import login, logout, authenticate
 
-class CustomRegisterSerializer(RegisterSerializer):
-    role = rest_serializers.CharField(max_length=255)
-    # department = rest_serializers.CharField(required=True, max_length=5)
-    # university = rest_serializers.CharField(required=True, max_length=100)
+# class CustomRegisterSerializer(RegisterSerializer):
+#     role = rest_serializers.CharField(max_length=255)
+#     # department = rest_serializers.CharField(required=True, max_length=5)
+#     # university = rest_serializers.CharField(required=True, max_length=100)
 
-    def get_cleaned_data(self):
-        data_dict = super().get_cleaned_data()
-        data_dict['role'] = self.validated_data.get('role', '')
-        # data_dict['department'] = self.validated_data.get('department', '')
-        # data_dict['university'] = self.validated_data.get('university', '')
-        return data_dict
+#     def get_cleaned_data(self):
+#         data_dict = super().get_cleaned_data()
+#         data_dict['role'] = self.validated_data.get('role', '')
+#         # data_dict['department'] = self.validated_data.get('department', '')
+#         # data_dict['university'] = self.validated_data.get('university', '')
+#         return data_dict
 
 
-class CustomUserDetailsSerializer(UserDetailsSerializer):
-    # role = rest_serializers.CharField(max_length=255)
-    role = rest_serializers.SerializerMethodField()
+# class CustomUserDetailsSerializer(UserDetailsSerializer):
+#     # role = rest_serializers.CharField(max_length=255)
+#     role = rest_serializers.SerializerMethodField()
 
-    def get_role(self, user):
-        groups = Group.objects.filter(user = user)
-        # wrap in list(), because QuerySet is not JSON serializable
-        isAdmin = False 
-        for group in groups:
-            if group.name == "admins":
-                isAdmin = True
-        if isAdmin:
-            return 'admin'
-        else:
-            return 'guest'
+#     def get_role(self, user):
+#         groups = Group.objects.filter(user = user)
+#         # wrap in list(), because QuerySet is not JSON serializable
+#         isAdmin = False 
+#         for group in groups:
+#             if group.name == "admins":
+#                 isAdmin = True
+#         if isAdmin:
+#             return 'admin'
+#         else:
+#             return 'guest'
 
-    class Meta(UserDetailsSerializer.Meta):
-        fields = UserDetailsSerializer.Meta.fields + \
-            ('name', 'role', 'image' )
+#     class Meta(UserDetailsSerializer.Meta):
+#         fields = UserDetailsSerializer.Meta.fields + \
+#             ('name', 'role', 'image' )
     
     # def to_representation(self, instance):
     #     representation = super(CustomUserDetailsSerializer, self).to_representation(instance)
@@ -55,45 +55,45 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     #     return representation
 
         
-class LoginSerializer(rest_serializers.Serializer):
-    """
-    This serializer defines two fields for authentication:
-      * username
-      * password.
-    It will try to authenticate the user with when validated.
-    """
-    username = rest_serializers.CharField(
-        label="Username",
-        write_only=True
-    )
-    password = rest_serializers.CharField(
-        label="Password",
-        # This will be used when the DRF browsable API is enabled
-        style={'input_type': 'password'},
-        trim_whitespace=False,
-        write_only=True
-    )
+# class LoginSerializer(rest_serializers.Serializer):
+#     """
+#     This serializer defines two fields for authentication:
+#       * username
+#       * password.
+#     It will try to authenticate the user with when validated.
+#     """
+#     username = rest_serializers.CharField(
+#         label="Username",
+#         write_only=True
+#     )
+#     password = rest_serializers.CharField(
+#         label="Password",
+#         # This will be used when the DRF browsable API is enabled
+#         style={'input_type': 'password'},
+#         trim_whitespace=False,
+#         write_only=True
+#     )
 
-    def validate(self, attrs):
-        # Take username and password from request
-        username = attrs.get('username')
-        password = attrs.get('password')
+#     def validate(self, attrs):
+#         # Take username and password from request
+#         username = attrs.get('username')
+#         password = attrs.get('password')
 
-        if username and password:
-            # Try to authenticate the user using Django auth framework.
-            user = authenticate(request=self.context.get('request'),
-                                email=username, password=password)
-            if not user:
-                # If we don't have a regular user, raise a ValidationError
-                msg = 'Access denied: wrong username or password.'
-                raise rest_serializers.ValidationError(msg, code='authorization')
-        else:
-            msg = 'Both "username" and "password" are required.'
-            raise rest_serializers.ValidationError(msg, code='authorization')
-        # We have a valid user, put it in the serializer's validated_data.
-        # It will be used in the view.
-        attrs['user'] = user
-        return attrs
+#         if username and password:
+#             # Try to authenticate the user using Django auth framework.
+#             user = authenticate(request=self.context.get('request'),
+#                                 email=username, password=password)
+#             if not user:
+#                 # If we don't have a regular user, raise a ValidationError
+#                 msg = 'Access denied: wrong username or password.'
+#                 raise rest_serializers.ValidationError(msg, code='authorization')
+#         else:
+#             msg = 'Both "username" and "password" are required.'
+#             raise rest_serializers.ValidationError(msg, code='authorization')
+#         # We have a valid user, put it in the serializer's validated_data.
+#         # It will be used in the view.
+#         attrs['user'] = user
+#         return attrs
 
 # class VisitorSerializer(rest_serializers.Serializer):
 #     """

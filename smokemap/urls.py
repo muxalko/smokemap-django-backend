@@ -15,12 +15,16 @@ Including another URLconf
 """
 from django.conf import settings
 from django.conf.urls.static import static
-from django.contrib import admin
+
 from django.urls import path, include
 
+urlpatterns = []
 
-urlpatterns = [
-    path('admin/', admin.site.urls),
+if settings.ADMIN_ENABLED:
+    from django.contrib import admin
+    urlpatterns += [path('admin/', admin.site.urls),]
+
+urlpatterns += [
     path('', include('backend.urls')),
     # tiles server
     # path("tiles/", include("django_tiles_gl.urls")),
@@ -29,8 +33,7 @@ urlpatterns = [
     #exempt your Graphql endpoint from CSRF protection
     # TODO: implement CSRF
     # path('graphql/', csrf_exempt(GraphQLView.as_view(graphiql=True))),
-    # upload support 
-    
+    # upload support
 ]
 
 #urlpatterns += static(settings.MEDIA_URL, document_root = settings.MEDIA_ROOT)
