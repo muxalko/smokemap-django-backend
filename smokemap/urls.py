@@ -20,9 +20,6 @@ from django.urls import path, include
 
 urlpatterns = []
 
-if settings.ADMIN_ENABLED:
-    from django.contrib import admin
-    urlpatterns += [path('admin/', admin.site.urls),]
 
 urlpatterns += [
     path('', include('backend.urls')),
@@ -36,6 +33,10 @@ urlpatterns += [
     # upload support
 ]
 
-#urlpatterns += static(settings.MEDIA_URL, document_root = settings.MEDIA_ROOT)
-urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+if settings.ADMIN_ENABLED:
+    from django.contrib import admin
+    urlpatterns += [path('admin/', admin.site.urls),]
+    #urlpatterns += static(settings.MEDIA_URL, document_root = settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+
 
