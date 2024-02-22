@@ -1,8 +1,16 @@
 {
   "version": 2,
-  "functions": {
-    "smokemap/wsgi.py": {
-      "runtime": "vercel-python-gis@1.0.0"
+  "builds": [
+    {
+      "src": "smokemap/wsgi.py",
+      "use": "vercel-python-gis@1.0.0",
+      "config": { "maxLambdaSize": "15mb", "runtime": "python3.9" }
     }
-  }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "smokemap/wsgi.py"
+    }
+  ]
 }
