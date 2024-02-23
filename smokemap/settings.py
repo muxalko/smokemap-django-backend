@@ -350,9 +350,9 @@ DATABASES = {
         'PASSWORD': PASS,
         'HOST': HOST,
         'PORT': PORT,
-        'OPTIONS': {
-            'options': OPTIONS
-            },
+        # 'OPTIONS': {
+        #     'options': OPTIONS
+        #     },
     }
 }
 
