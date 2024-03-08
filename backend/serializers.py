@@ -1,12 +1,32 @@
 from rest_framework_gis import serializers as gis_serializers
 from rest_framework import serializers as rest_serializers
 from rest_framework_gis.serializers import GeometrySerializerMethodField
-from backend.models import Place, Address
+from backend.models import Place, Address, Location
 
 
 class TagListingField(rest_serializers.RelatedField):
      def to_representation(self, value):
          return value.name
+
+class LocationSerializer(gis_serializers.GeoFeatureModelSerializer):
+    """ A class to serialize locations as GeoJSON compatible data """
+
+    class Meta:
+        model = Location
+        fields = ['name','category','info','address', 'tags', 'place_id']
+        geo_field = "geom"
+
+class AddressSerializer(gis_serializers.GeoFeatureModelSerializer):
+    """ A class to serialize locations as GeoJSON compatible data """
+
+    places = rest_serializers.SerializerMethodField('get_places')
+    def get_places(self, value): 
+        return Place.objects.filter(address=value).values()
+    
+    class Meta:
+        model = Address
+        fields = ["addressString", "places"]
+        geo_field = "location"
 
 class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
 

@@ -20,6 +20,9 @@ django-graphql-geojson = "*"
 boto3 = "*"
 
 [dev-packages]
+fiona = "*"
+pandas = "*"
+nltk = "*"
 
 [requires]
 python_version = "3.9"

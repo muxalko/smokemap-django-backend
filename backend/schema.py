@@ -1,7 +1,7 @@
 import graphene
 import graphql_jwt
 from graphene_django import DjangoObjectType
-from .models import Category, Tag, Request, Address, Place, Image
+from .models import Category, Tag, Request, Address, Place, Image, Location
 from django.core.exceptions import ValidationError
 import graphql_geojson
 from django.utils import timezone
@@ -9,7 +9,7 @@ from django.utils import timezone
 from graphene.types import generic
 from django.contrib.gis import geos
 from django.conf import settings
-# import logging
+
 import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -17,6 +17,8 @@ from django.core.management.utils import get_random_string
 from .models import CustomUser
 from django.contrib.auth.models import Group
 
+import logging
+logger = logging.getLogger( __name__ )
 
 ##################################TYPES###############################
 class UserType(DjangoObjectType):
@@ -27,7 +29,7 @@ class UserType(DjangoObjectType):
     def resolve_role(self, info):
         customUser = CustomUser.objects.get(email=self)
         groups = Group.objects.filter(user=customUser)
-        print("groups",groups)
+        logger.debug("groups",groups)
         # wrap in list(), because QuerySet is not JSON serializable
         isAdmin = False 
         for group in groups:
@@ -54,7 +56,7 @@ class CategoryType(DjangoObjectType):
     
     # @classmethod
     # def get_queryset(cls, queryset, info):
-    #     print("CategoryType.info.context.user:",info.context.user)
+    #     logger.debug("CategoryType.info.context.user:",info.context.user)
     #     if info.context.user.is_anonymous:
     #         return queryset.filter(published=True)
     #     return queryset
@@ -182,7 +184,7 @@ class Query(graphene.ObjectType):
     #     )
     # )
 
-    def resolve_categories(root, info):
+    def resolve_categories(root, info): 
         # Querying a list
         return Category.objects.all()
      
@@ -209,10 +211,10 @@ class Query(graphene.ObjectType):
 
     # @login_required
     def resolve_requests_to_approve(root, info, **kwargs):
-        # print("context:",vars(info.context))
-        print("headers:",info.context.headers)
+        # logger.debug("context:",vars(info.context))
+        logger.debug("headers:",info.context.headers)
 
-        # print("csrf token:",info.context.headers['X-Csrftoken'])
+        # logger.debug("csrf token:",info.context.headers['X-Csrftoken'])
         if not info.context.user.is_authenticated:
             raise ValidationError(("You must be logged in to perform this action"),)
         # Querying a list
@@ -251,7 +253,7 @@ class Query(graphene.ObjectType):
         return Place.objects.filter(name__startswith=name)
     
     def resolve_s3_presigned_url(root, info):
-        print("Creating Boto3 client for S3 manipulations")
+        logger.debug("Creating Boto3 client for S3 manipulations")
         s3_client = boto3.client("s3",
                                     aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
                                     aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
@@ -259,7 +261,7 @@ class Query(graphene.ObjectType):
                                     config=Config(signature_version='s3v4'))
         
         object_name = get_random_string(length=16, allowed_chars='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
-        print ("Generated name for S3 upload object", object_name)
+        logger.debug("Generated name for S3 upload object", object_name)
         
         try:
             response = s3_client.generate_presigned_post(settings.AWS_STORAGE_BUCKET_NAME,
@@ -281,7 +283,7 @@ class Query(graphene.ObjectType):
                                                         # Conditions=[["starts-with", "$key", "uploads/"]],
                                                         ExpiresIn=60)
         except ClientError as e:
-            print(e)
+            logger.debug(e)
             return None
         print (response)
         # The response contains the presigned URL and required fields
@@ -305,7 +307,7 @@ class CreateRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input):
-        print("CreateRequest", dir(info.context.META))
+        logger.debug("CreateRequest", dir(info.context.META))
         # apply validation steps
         validated = True
         validation_message = ''
@@ -316,15 +318,15 @@ class CreateRequest(graphene.Mutation):
         # for NonAddressMode we will check the addressString for an array of numbers
         # it will be sent in the following format: [lng,lat]
         if input.address_string.startswith('[') and input.address_string.endswith(']'):
-            print("Found coordinates in the address string, trying to parse it")
+            logger.debug("Found coordinates in the address string, trying to parse it")
             nonAddressMode = True
             tmp = input.address_string[1:][:-1]
-            print(" - raw string",tmp)
+            logger.debug(" - raw string",tmp)
             coordinates = tmp.split(',')
-            print(" - converted to array", coordinates)
+            logger.debug(" - converted to array", coordinates)
             myaddress.addressString = "CustomAddress_{}_{}_{}".format(input.name,coordinates[0],coordinates[1])
             myaddress.location = geos.Point((float(coordinates[0]),float(coordinates[1])))
-            print("Saving {}".format(myaddress.location))
+            logger.debug("Saving {}".format(myaddress.location))
             myaddress.save(omit_geocode=True)
 
 
@@ -340,30 +342,30 @@ class CreateRequest(graphene.Mutation):
                 try:
                     request = Request.objects.filter(name=input.name, address=myaddress)
                     if (len(request) > 0):
-                        print("FOUND DUPLICATE REQUEST !!!")
-                        print("Found request(s): ", request)
+                        logger.debug("FOUND DUPLICATE REQUEST !!!")
+                        logger.debug("Found request(s): ", request)
                         validated = False
                         validation_message = "There is already an {} request with the same name.".format("approved" if request[0].approved else "unapproved")
                 except Exception as request_e:
-                    print("Validation of Request is OK: ", request_e)
+                    logger.debug("Validation of Request is OK: ", request_e)
                 
                 # In case requests were deleted lets check if that same place already exists
                 # we should not find any, hence Exception is a good exit
                 try:
                     place = Place.objects.get(name=input.name, address=myaddress)
                     if (len(place) > 0):
-                        print("FOUND DUPLICATE PLACE !!!")
-                        print("Found place(s): ", place)
+                        logger.debug("FOUND DUPLICATE PLACE !!!")
+                        logger.debug("Found place(s): ", place)
                         validated = False
                         validation_message = 'There is already a place with the same name and address.'
                 except Exception as place_e:
-                    print("Validation of Place is OK: ", place_e)
+                    logger.debug("Validation of Place is OK: ", place_e)
 
             except Exception as myaddress_e:
-                print(myaddress_e)
+                logger.debug(myaddress_e)
                 myaddress.addressString = input.address_string
                 myaddress.save()
-                print("New address was created: ", myaddress)
+                logger.debug("New address was created: ", myaddress)
 
 
             if (not validated):
@@ -375,14 +377,14 @@ class CreateRequest(graphene.Mutation):
         try:
             category = Category.objects.get(pk=input.category)
         except Exception as e:
-            print("Exception: ", e)
+            logger.debug("Exception: ", e)
             raise ValidationError(
                 ('Category was not found'),
                 params={'value': input.category},
             )
 
         if (category is not None):
-            # print("Category: ", category)
+            # logger.debug("Category: ", category)
             request = Request()
             request.name = input.name
             request.category = category
@@ -393,16 +395,16 @@ class CreateRequest(graphene.Mutation):
         
             # request.imageurl = input.imageurl
 
-            print("Request(Category:{}, Name: {}, Desc: {}, Address: {}, Tags: {}, Requested by :{})".format(
+            logger.debug("Request(Category:{}, Name: {}, Desc: {}, Address: {}, Tags: {}, Requested by :{})".format(
                 request.category, request.name, request.description, request.address, request.tags, request.requested_by))
             request.save()
 
         # if len(input.images) > 1:
         #     for file in  input.images:
-        #         print("Filename: ", file)
+        #         logger.debug("Filename: ", file)
         #         #https://twigstechtips.blogspot.com/2012/04/django-how-to-save-inmemoryuploadedfile.html
         #         path = default_storage.save(file, ContentFile(file.read()))
-        #         print("Saved to ", path)
+        #         logger.debug("Saved to ", path)
 
         return CreateRequest(request=request)
 
@@ -438,32 +440,34 @@ class ApproveRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input, id):
+        logger.debug("Start approval process for request id", id)
+        # if not info.context['user']['is_authenticated']:
         if not info.context.user.is_authenticated:
             raise ValidationError(("You must be logged in to perform this action"),)
-        print("Start approval process for request id=", id)
-         # apply validation steps
+        
+        # apply validation steps
         validated = True
         validation_message = ''
         request = Request.objects.get(pk=id)
-        print(request)
+        logger.debug(request)
         if request.approved:
             raise ValidationError(
                 ('The request has already been approved.'),
                 params={'approved_by': request.approved_by},
             )
 
-        print("Check if place already exists: ", request.name, request.address)
+        logger.debug("Check if place already exists: ", request.name, request.address)
         # Check if place already exists
         try:
             place = Place.objects.get(name=request.name)#,address=request.address.id)
-            print("Found: ", place)
+            logger.debug("Found: ", place)
             validated = False
             validation_message = 'There is already a place with the same name ' + place.name
         except Exception as place_e:
-            print(place_e)
+            logger.debug(place_e)
         
         if (not validated):
-                print(validation_message)
+                logger.debug(validation_message)
                 raise ValidationError(
                     (validation_message),
                     params={'value': request},
@@ -476,12 +480,12 @@ class ApproveRequest(graphene.Mutation):
         newPlace.address = request.address
 
         newPlace.save()
-        print("New place was created: ", newPlace)
+        logger.debug("New place was created: ", newPlace)
 
         ##### PROCESS TAGS #####
         # find existing 
         tags = Tag.objects.filter(name__in=request.tags)
-        print("Found tags: ", tags, len(tags))
+        logger.debug("Found tags: ", tags, len(tags))
         # if None found, create as new tags
         if (len(tags)<1):
             # create new tags
@@ -492,14 +496,14 @@ class ApproveRequest(graphene.Mutation):
                 newTag.save()
                 # assign to place
                 newPlace.tags.add(newTag)
-                print("New tag was added:", newTag)
+                logger.debug("New tag was added:", newTag)
         else:
             # check for not existing
             for tag in request.tags:
-                print("Check if tag ",tag,"is in tags",tags)
+                logger.debug("Check if tag ",tag,"is in tags",tags)
                 found = next((x for x in tags if x.name == tag), None)
                 if found:
-                    print("Ignore existing tag:",tag)
+                    logger.debug("Ignore existing tag:",tag)
                     # assign to place
                     newPlace.tags.add(found)
                 else:
@@ -509,7 +513,7 @@ class ApproveRequest(graphene.Mutation):
                     newTag.save()
                     # assign to place
                     newPlace.tags.add(newTag)
-                    print("New tag was added:", newTag)
+                    logger.debug("New tag was added:", newTag)
 
         # tags = Tag.objects.filter(name__in=request.tags)
         # newPlace.tags.set(tags)
@@ -518,17 +522,33 @@ class ApproveRequest(graphene.Mutation):
         ##### PROCESS Images #####
         # find existing images and update place_id if not exist
         images = Image.objects.filter(request_id=request.id)
-        print("Found images: ", images, len(images))
+        logger.debug("Found images: ", images, len(images))
         if (len(images)>0):
             for image in images:
                 if not image.place_id:
                     image.place_id = newPlace.id
                     image.save()
-                    print("Image {} was updated with place # {}".format(image.name, image.place_id))
+                    logger.debug("Image {} was updated with place # {}".format(image.name, image.place_id))
                 else:
-                    print("Error: Image {} already has place # {}".format(image.name, image.place_id))
+                    logger.debug("Error: Image {} already has place # {}".format(image.name, image.place_id))
         else:
-            print("No images found associated with request #", request.id)
+            logger.debug("No images found associated with request #", request.id)
+
+        # create location for showing on the map
+        # location consist of lightweight model for fast showing on the map
+        location = Location()
+        location.place_id = str(newPlace.id)
+        location.name = newPlace.name
+        location.category = newPlace.category.id
+        location.info = newPlace.description
+        location.address = newPlace.address.addressString
+        location.geom = newPlace.address.location
+        tags = newPlace.tags.values_list('name',flat=True)
+        if (tags):
+            location.tags = ','.join(tags)
+       
+        location.save()
+        logger.debug("Saved location", location)
 
         # set request as approved
         request.approved = True
@@ -537,7 +557,9 @@ class ApproveRequest(graphene.Mutation):
         request.approved_comment = input.approved_comment
 
         request.save()
-        print("The request (id={}) was updated ".format(request.id), newPlace)
+
+        logger.debug("The request (id={}) was updated ".format(request.id), newPlace)
+
         return ApproveRequest(request=request)
 
 class ImageInput(graphene.InputObjectType):
@@ -570,7 +592,7 @@ class ObtainJSONWebToken(graphql_jwt.JSONWebTokenMutation):
 
     @classmethod
     def resolve(cls, root, info, **kwargs):
-        print("context user:", info.context.user)
+        logger.debug("context user:", info.context.user)
         return cls(user=info.context.user)
     
 class Mutation(graphene.ObjectType):

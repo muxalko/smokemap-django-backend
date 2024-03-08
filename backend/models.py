@@ -80,7 +80,7 @@ class Address(models.Model):
             validated = False
             validation_message = "Address already exists!"
         except Exception as e:
-            print("Address already exists: ", e)
+            print("Trying to find address in database: ", e)
             
         if (not validated):
             raise ValidationError(
@@ -101,8 +101,8 @@ class Address(models.Model):
                     ('The address cannot be resolved'),
                     params={'value': self.addressString},
                 )
-        print("Saving address with the following params:")
-        print(kwargs)
+        print("Saving address with the following params:", self)
+        
         return super(Address, self).save(*args, **kwargs)
 
     def __str__(self):
@@ -172,3 +172,20 @@ class Image(models.Model):
 
     def __str__(self):
         return self.url
+    
+
+class Location(models.Model):
+    place_id = models.CharField(max_length=10)
+    name = models.CharField(max_length=128)
+    category = models.IntegerField()
+    info = models.CharField(max_length=254,default="")
+    address = models.CharField(max_length=254,default="")
+    tags = models.CharField(max_length=254,default="")
+    geom = models.PointField(srid=4326)
+    
+    class Meta:
+        verbose_name_plural = 'Locations'
+
+    def __str__(self):
+        # return "{}".format(self.name)
+        return "{},{},{},({}),[{}]".format(self.name, self.category, self.address, self.geom, self.tags)
