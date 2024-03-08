@@ -14,13 +14,16 @@ from pathlib import Path
 import os
 # load .env
 from dotenv import load_dotenv
-load_dotenv(".env.local")
+load_dotenv()
 
 # set gdal library path for django to find it
 from glob import glob
 
 # disable admin module by default
 ADMIN_ENABLED = False
+
+
+LOG_PATH = os.path.join(BASE_DIR, "logs/")
 
 if os.getenv("SETTINGS_MODE") == "local":
     print("DEVELOPMENT MODE !!! - Hello from " + str(os.getpid()))
@@ -81,6 +84,99 @@ if os.getenv("SETTINGS_MODE") == "local":
             "graphql_jwt.middleware.JSONWebTokenMiddleware",
         ],
     }
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s [%(levelname)s]- %(message)s"
+            },
+            "simple": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            },
+            "verbose": {
+                "format": "%(asctime)s %(levelname)s %(module)s %(process)d %(thread)d %(message)s"
+            },
+        },
+        "handlers": {
+            "console": {
+                "level": "DEBUG",
+                "class": "logging.StreamHandler",
+                "formatter": "standard"
+            },
+            "django.log": {
+                "level": "DEBUG",
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": LOG_PATH + "django.log",
+                "maxBytes": 1024*1024*5, # 5MB
+                "backupCount": 5,
+                "formatter": "verbose",
+            },
+            "backend_schema.log": {
+                "level": "DEBUG",
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": LOG_PATH + "backend_schema.log",
+                "maxBytes": 1024*1024*5, # 5MB
+                "backupCount": 5,
+                "formatter": "verbose",
+            },
+            "backend_stats.log": {
+                "level": "DEBUG",
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": LOG_PATH + "backend_stats.log",
+                "maxBytes": 1024*1024*5, # 5MB
+                "backupCount": 5,
+                "formatter": "verbose",
+            },
+            "django_error.log": {
+                "level": "DEBUG",
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": LOG_PATH + "django_error.log",
+                "formatter": "standard"
+            },
+            "info.log": {
+                "level": "DEBUG",
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": LOG_PATH + "info.log",
+                "formatter": "standard"
+            },
+            'mail_admins': {
+                'level': 'ERROR',
+                'class': 'django.utils.log.AdminEmailHandler'
+            }
+        },
+        "loggers": {
+            "django": {
+                "handlers": ["console"],   
+                "level": "INFO",
+                "propagate": True,
+                "formatter": "simple",
+            },
+            "django.request": {
+                "handlers": ["django_error.log", "console"],
+                "level": "DEBUG",
+                "propagate": True,
+            },
+            "django.db.backends": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": True,
+            },
+            "backend.schema": {
+                "handlers": ["backend_schema.log"],
+                "level": "DEBUG",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+            "backend.stats": {
+                "handlers": ["backend_stats.log"],
+                "level": "DEBUG",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+        },
+    }
+
 # try to detect vercel environment
 elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     print("STAGING MODE !!! - Hello from " + str(os.getpid()))
@@ -509,97 +605,3 @@ AUTHENTICATION_BACKENDS = [
 #         "VERIFIED_EMAIL": True,
 #     },
 # }
-
-LOG_PATH = os.path.join(BASE_DIR, "logs/")
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-     "formatters": {
-        "standard": {
-            "format": "%(asctime)s [%(levelname)s]- %(message)s"
-        },
-        "simple": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        },
-        "verbose": {
-            "format": "%(asctime)s %(levelname)s %(module)s %(process)d %(thread)d %(message)s"
-        },
-    },
-    "handlers": {
-        "console": {
-            "level": "DEBUG",
-            "class": "logging.StreamHandler",
-            "formatter": "standard"
-        },
-        "django.log": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_PATH + "django.log",
-            "maxBytes": 1024*1024*5, # 5MB
-            "backupCount": 5,
-            "formatter": "verbose",
-        },
-        "backend_schema.log": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_PATH + "backend_schema.log",
-            "maxBytes": 1024*1024*5, # 5MB
-            "backupCount": 5,
-            "formatter": "verbose",
-        },
-        "backend_stats.log": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_PATH + "backend_stats.log",
-            "maxBytes": 1024*1024*5, # 5MB
-            "backupCount": 5,
-            "formatter": "verbose",
-        },
-         "django_error.log": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_PATH + "django_error.log",
-            "formatter": "standard"
-        },
-        "info.log": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_PATH + "info.log",
-            "formatter": "standard"
-        },
-        'mail_admins': {
-            'level': 'ERROR',
-            'class': 'django.utils.log.AdminEmailHandler'
-        }
-    },
-    "loggers": {
-        "django": {
-            "handlers": ["console"],   
-            "level": "INFO",
-            "propagate": True,
-            "formatter": "simple",
-        },
-        "django.request": {
-            "handlers": ["django_error.log", "console"],
-            "level": "DEBUG",
-            "propagate": True,
-        },
-        "django.db.backends": {
-            "handlers": ["console"],
-            "level": "DEBUG",
-            "propagate": True,
-        },
-        "backend.schema": {
-            "handlers": ["backend_schema.log"],
-            "level": "DEBUG",
-            "propagate": True,
-            "formatter": "verbose",
-        },
-        "backend.stats": {
-            "handlers": ["backend_stats.log"],
-            "level": "DEBUG",
-            "propagate": True,
-            "formatter": "verbose",
-        },
-    },
-}
