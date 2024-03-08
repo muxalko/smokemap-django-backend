@@ -22,8 +22,10 @@ from glob import glob
 # disable admin module by default
 ADMIN_ENABLED = False
 
+# Build paths inside the project like this: BASE_DIR / "subdir".
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-LOG_PATH = os.path.join(BASE_DIR, "logs/")
+
 
 if os.getenv("SETTINGS_MODE") == "local":
     print("DEVELOPMENT MODE !!! - Hello from " + str(os.getpid()))
@@ -84,6 +86,7 @@ if os.getenv("SETTINGS_MODE") == "local":
             "graphql_jwt.middleware.JSONWebTokenMiddleware",
         ],
     }
+    LOG_PATH = os.path.join(BASE_DIR, "logs/")
     LOGGING = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -256,6 +259,63 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
         "JWT_COOKIE_SAMESITE": "Lax"
     }
 
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s [%(levelname)s]- %(message)s"
+            },
+            "simple": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            },
+            "verbose": {
+                "format": "%(asctime)s %(levelname)s %(module)s %(process)d %(thread)d %(message)s"
+            },
+        },
+        "handlers": {
+            "console": {
+                "level": "DEBUG",
+                "class": "logging.StreamHandler",
+                "formatter": "standard"
+            },
+            'mail_admins': {
+                'level': 'ERROR',
+                'class': 'django.utils.log.AdminEmailHandler'
+            }
+        },
+        "loggers": {
+            "django": {
+                "handlers": ["console"],   
+                "level": "INFO",
+                "propagate": True,
+                "formatter": "simple",
+            },
+            "django.request": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": True,
+            },
+            "django.db.backends": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": True,
+            },
+            "backend.schema": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+            "backend.stats": {
+                "handlers": ["console"],
+                "level": "DEBUG",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+        },
+    }
+
 elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
     print("PRODUCTION MODE !!! - Hello from " + str(os.getpid()))
 
@@ -336,6 +396,63 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
         "JWT_COOKIE_SAMESITE": "Lax"
     }
 
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s [%(levelname)s]- %(message)s"
+            },
+            "simple": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            },
+            "verbose": {
+                "format": "%(asctime)s %(levelname)s %(module)s %(process)d %(thread)d %(message)s"
+            },
+        },
+        "handlers": {
+            "console": {
+                "level": "INFO",
+                "class": "logging.StreamHandler",
+                "formatter": "standard"
+            },
+            'mail_admins': {
+                'level': 'ERROR',
+                'class': 'django.utils.log.AdminEmailHandler'
+            }
+        },
+        "loggers": {
+            "django": {
+                "handlers": ["console"],   
+                "level": "INFO",
+                "propagate": True,
+                "formatter": "simple",
+            },
+            "django.request": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": True,
+            },
+            "django.db.backends": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": True,
+            },
+            "backend.schema": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+            "backend.stats": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": True,
+                "formatter": "verbose",
+            },
+        },
+    }
+
 else:
     print("Unrecognized environment, quitting...")
     quit()
@@ -344,8 +461,6 @@ else:
 print("GDAL_LIBRARY_PATH="+GDAL_LIBRARY_PATH)
 print("GEOS_LIBRARY_PATH="+GEOS_LIBRARY_PATH)
 
-# Build paths inside the project like this: BASE_DIR / "subdir".
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
