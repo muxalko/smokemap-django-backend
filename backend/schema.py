@@ -307,7 +307,7 @@ class CreateRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input):
-        logger.debug("CreateRequest", dir(info.context.META))
+        
         # apply validation steps
         validated = True
         validation_message = ''
