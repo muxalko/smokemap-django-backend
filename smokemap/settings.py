@@ -507,7 +507,7 @@ INSTALLED_APPS += [
 ]
 
 MIDDLEWARE = [
-    # "backend.stats.StatsMiddleware",
+    "backend.stats.StatsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.security.SecurityMiddleware",
