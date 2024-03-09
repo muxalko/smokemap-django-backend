@@ -456,7 +456,7 @@ class ApproveRequest(graphene.Mutation):
                 params={'approved_by': request.approved_by},
             )
 
-        logger.debug("Check if place already exists: %s", request.name, request.address)
+        logger.debug("Check if place already exists: %s %s", request.name, request.address)
         # Check if place already exists
         try:
             place = Place.objects.get(name=request.name)#,address=request.address.id)
