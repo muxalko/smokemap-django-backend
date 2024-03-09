@@ -365,7 +365,7 @@ class CreateRequest(graphene.Mutation):
                 logger.debug(myaddress_e)
                 myaddress.addressString = input.address_string
                 myaddress.save()
-                logger.debug("New address was created: ", myaddress)
+                logger.debug("New address was created: ", myaddress.addressString)
 
 
             if (not validated):
