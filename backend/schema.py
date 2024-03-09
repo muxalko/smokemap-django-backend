@@ -522,7 +522,7 @@ class ApproveRequest(graphene.Mutation):
         ##### PROCESS Images #####
         # find existing images and update place_id if not exist
         images = Image.objects.filter(request_id=request.id)
-        logger.debug("Found images: %s", images, len(images))
+        logger.debug("Found images: %s, length=%s", images, len(images))
         if (len(images)>0):
             for image in images:
                 if not image.place_id:
@@ -558,7 +558,7 @@ class ApproveRequest(graphene.Mutation):
 
         request.save()
 
-        logger.debug("The request (id={}) was updated ".format(request.id), newPlace)
+        logger.debug("The request (id=%s) was updated with: %s",request.id, newPlace)
 
         return ApproveRequest(request=request)
 
