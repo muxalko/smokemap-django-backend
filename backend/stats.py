@@ -27,6 +27,7 @@ class StatsMiddleware(MiddlewareMixin):
         response["X-Page-Generation-Duration-ms"] = int(duration * 1000)
         # print(safe_serialize(request.__dict__))
         #logger.debug('Took: %sms %s %s %s%s %s' % (int(duration * 1000), request.META.get('REMOTE_ADDR'), request.method, request.path, "?"+request.META.get('QUERY_STRING') if request.META.get('QUERY_STRING') else '', request.body))
-        logger.debug("Took: {}ms {} {} {}{} {}".format(int(duration * 1000), request.META.get('REMOTE_ADDR'), request.method, request.path, "?"+request.META.get('QUERY_STRING') if request.META.get('QUERY_STRING') else '', request.body.decode('utf-8')))
+        # logger.debug("Took: {}ms {} {} {}{} {}".format(int(duration * 1000), request.META.get('REMOTE_ADDR'), request.method, request.path, "?"+request.META.get('QUERY_STRING') if request.META.get('QUERY_STRING') else '', request.body.decode('utf-8')))
+        logger.debug("Took: {}ms {} {} {}{}".format(int(duration * 1000), request.META.get('REMOTE_ADDR'), request.method, request.path, "?"+request.META.get('QUERY_STRING') if request.META.get('QUERY_STRING') else ''))
 
         return response
