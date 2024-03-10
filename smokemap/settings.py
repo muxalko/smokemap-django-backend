@@ -336,7 +336,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
 
     CORS_ALLOW_HEADERS = ["x-csrftoken","content-type"]
 
-    CORS_ALLOW_CREDENTIALS = False
+    CORS_ALLOW_CREDENTIALS = True
 
     CORS_ALLOWED_ORIGINS = [
         "https://smokemap.vercel.app",
