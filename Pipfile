@@ -15,7 +15,7 @@ djangorestframework-gis = "*"
 psycopg2-binary = "*"
 geopy = "*"
 django-filter = "*"
-urllib3 = "==1.26.18"
+urllib3 = "==1.26.19"
 django-graphql-geojson = "*"
 boto3 = "*"
 
