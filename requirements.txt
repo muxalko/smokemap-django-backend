@@ -8,7 +8,7 @@ django-cors-headers==4.3.1; python_version >= '3.8'
 django-filter==23.5; python_version >= '3.7'
 django-graphql-geojson==0.1.4
 django-graphql-jwt==0.4.0; python_version >= '3.6'
-djangorestframework==3.14.0; python_version >= '3.6'
+djangorestframework==3.15.2; python_version >= '3.6'
 djangorestframework-gis==1.0
 djangorestframework-simplejwt==5.3.1; python_version >= '3.8'
 geographiclib==2.0; python_version >= '3.7'
