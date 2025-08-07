@@ -2,10 +2,6 @@
   "version": 2,
   "builds": [
     {
-      "src": "build_files.sh",
-      "use": "@vercel/static-build"
-    },
-    {
       "src": "smokemap/wsgi.py",
       "use": "vercel-python-gis@1.0.0",
       "config": { "maxLambdaSize": "15mb", "runtime": "python3.9" }
