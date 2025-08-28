@@ -191,6 +191,9 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     GEOS_LIBRARY_PATH = "libgeos_c.so.1"
     DEBUG = True
     ALLOWED_HOSTS = [".vercel.app"]
+
+    CORS_ALLOW_ALL_ORIGINS = True
+    
     CORS_ALLOWED_ORIGINS = [
         # vercel preview/development/staging
         # "https://smokemap-webapp-git-staging-muxalko.vercel.app",
@@ -204,7 +207,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     CORS_ALLOW_HEADERS = ["x-csrftoken","content-type"]
 
     CORS_ALLOW_CREDENTIALS = True
-
+    
     CSRF_TRUSTED_ORIGINS = [
          "https://smokemap-webapp-git-staging-muxalkos-projects.vercel.app",
         # "https://smokemap-webapp-*.vercel.app"
