@@ -189,7 +189,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     #GEOS_LIBRARY_PATH = ".vercel/builders/node_modules/vercel-python-gis/dist/files/libgeos_c.so.1"
     GDAL_LIBRARY_PATH = "libgdal.so"
     GEOS_LIBRARY_PATH = "libgeos_c.so.1"
-    DEBUG = False
+    DEBUG = True
     ALLOWED_HOSTS = [".vercel.app"]
     CORS_ALLOWED_ORIGINS = [
         # vercel preview/development/staging
