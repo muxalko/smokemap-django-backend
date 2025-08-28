@@ -206,7 +206,8 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     CORS_ALLOW_CREDENTIALS = True
 
     CSRF_TRUSTED_ORIGINS = [
-        "https://smokemap-webapp-*.vercel.app"
+         "https://smokemap-webapp-git-staging-muxalkos-projects.vercel.app"
+        # "https://smokemap-webapp-*.vercel.app"
     ]
 
     # SIMPLE_JWT = {
