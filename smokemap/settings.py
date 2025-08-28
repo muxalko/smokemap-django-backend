@@ -192,7 +192,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
     DEBUG = False
     ALLOWED_HOSTS = [".vercel.app"]
 
-    # CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_ALL_ORIGINS = False
 
     CORS_ALLOWED_ORIGINS = [
         # vercel preview/development/staging
