@@ -25,7 +25,11 @@ ADMIN_ENABLED = False
 # Build paths inside the project like this: BASE_DIR / "subdir".
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+]
 
 if os.getenv("SETTINGS_MODE") == "local":
     print("DEVELOPMENT MODE !!! - Hello from " + str(os.getpid()))
