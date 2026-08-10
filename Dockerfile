@@ -1,26 +1,26 @@
-FROM python:3.9-alpine
+# syntax=docker/dockerfile:1
 
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+FROM python:3.12-slim-bookworm AS dependencies
 
-RUN apk add --no-cache --virtual .build-deps \
-    ca-certificates gcc postgresql-dev linux-headers musl-dev \
-    libffi-dev jpeg-dev zlib-dev \
-    geos gdal 
-    
-WORKDIR /app/backend
-RUN pip install --upgrade pip && pip install virtualenv
-# RUN pip install virtualenv
-ADD . /app/backend
-RUN virtualenv venv
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
 
-RUN source venv/bin/activate
-RUN pip install -r requirements.txt
-COPY . /app/backend/
+WORKDIR /app
 
-ENV VIRTUAL_ENV /env
-ENV PATH /env/bin:$PATH
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends binutils gdal-bin libproj-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install --requirement requirements.txt
+
+FROM dependencies AS development
+
+COPY . .
 
 EXPOSE 8000
-# CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-CMD ["gunicorn", "--bind", ":8000", "smokemap.wsgi:application"]
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

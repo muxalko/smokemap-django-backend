@@ -46,7 +46,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 
 class Category(models.Model):
-    name = models.CharField(max_length=25)
+    name = models.CharField(unique=True, max_length=25)
     description = models.CharField(null=True, max_length=255)
 
     class Meta:
@@ -114,7 +114,7 @@ def get_tags_default():
 
 class Request(models.Model):
     name = models.CharField(max_length=100)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, default=-1)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.CharField(max_length=255)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     # just aray of strings on request
@@ -147,8 +147,7 @@ class Request(models.Model):
 
 class Place(models.Model):
     name = models.CharField(unique=True, max_length=255)
-    category = models.ForeignKey(
-        Category, on_delete=models.PROTECT, default=-1)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.TextField(max_length=255, null=True)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     tags = models.ManyToManyField(Tag, related_name="places")

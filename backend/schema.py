@@ -258,7 +258,11 @@ class Query(graphene.ObjectType):
                                     aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
                                     aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
                                     region_name=settings.AWS_S3_REGION_NAME,
-                                    config=Config(signature_version='s3v4'))
+                                    endpoint_url=settings.AWS_S3_ENDPOINT_URL or None,
+                                    config=Config(
+                                        signature_version='s3v4',
+                                        s3={'addressing_style': settings.AWS_S3_ADDRESSING_STYLE},
+                                    ))
         
         object_name = get_random_string(length=16, allowed_chars='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
         logger.debug("Generated name for S3 upload object: %s", object_name)

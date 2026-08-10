@@ -1,6 +1,25 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from .models import Category
+
+
+class CategoryProvisioningTests(TestCase):
+    def test_provisional_categories_are_available(self):
+        self.assertSetEqual(
+            set(Category.objects.values_list("name", flat=True)),
+            {
+                "Indoors",
+                "Outdoors",
+                "Rooftop",
+                "Underground",
+                "On the water",
+                "Underwater",
+                "In the air",
+                "Other",
+            },
+        )
+
 class UsersManagersTests(TestCase):
 
     def test_create_user(self):

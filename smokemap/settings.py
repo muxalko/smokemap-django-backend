@@ -19,6 +19,27 @@ load_dotenv()
 # set gdal library path for django to find it
 from glob import glob
 
+
+def find_library_path(environment_name, *patterns):
+    configured_path = os.getenv(environment_name)
+    if configured_path:
+        return configured_path
+
+    for pattern in patterns:
+        matches = sorted(glob(pattern))
+        if matches:
+            return matches[0]
+
+    raise RuntimeError(f"Unable to locate {environment_name}")
+
+
+def environment_list(name, default):
+    return [
+        value.strip()
+        for value in os.environ.get(name, default).split(",")
+        if value.strip()
+    ]
+
 # disable admin module by default
 ADMIN_ENABLED = False
 
@@ -36,8 +57,16 @@ if os.getenv("SETTINGS_MODE") == "local":
 
     # enable admin module in development mode only
     ADMIN_ENABLED = True
-    GDAL_LIBRARY_PATH=glob("/usr/lib/libgdal.so.*")[0]
-    GEOS_LIBRARY_PATH=glob("/usr/lib/x86_64-linux-gnu/libgeos_c.so.*")[0]
+    GDAL_LIBRARY_PATH = find_library_path(
+        "GDAL_LIBRARY_PATH",
+        "/usr/lib/libgdal.so.*",
+        "/usr/lib/*/libgdal.so.*",
+    )
+    GEOS_LIBRARY_PATH = find_library_path(
+        "GEOS_LIBRARY_PATH",
+        "/usr/lib/libgeos_c.so.*",
+        "/usr/lib/*/libgeos_c.so.*",
+    )
     # SECURITY WARNING: don"t run with debug turned on in production!
     DEBUG = True
     # ALLOWED_HOSTS=["*"]
@@ -45,16 +74,19 @@ if os.getenv("SETTINGS_MODE") == "local":
     # CORS_ORIGIN_ALLOW_ALL = True
     CORS_ALLOW_CREDENTIALS = True
     ALLOWED_HOSTS = [
-        "localhost", # retrieve schema wwhen developing
-        "smokemap.org"
+        "localhost",
+        "127.0.0.1",
+        "backend",
+        "smokemap.org",
         ]
-    CORS_ALLOWED_ORIGINS = [
-        "http://localhost:3000",
-        "http://smokemap.org:3000"
-    ]
-    CSRF_TRUSTED_ORIGINS = [
-        "http://smokemap.org:3000",
-    ]
+    CORS_ALLOWED_ORIGINS = environment_list(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
+    CSRF_TRUSTED_ORIGINS = environment_list(
+        "CSRF_TRUSTED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
 
     # # used with allauth/dj-rest-auth
     # SIMPLE_JWT = {
@@ -478,6 +510,8 @@ AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID","")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY","")
 AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME","")
 AWS_S3_REGION_NAME = os.environ.get("AWS_REGION","")
+AWS_S3_ENDPOINT_URL = os.environ.get("AWS_S3_ENDPOINT_URL","")
+AWS_S3_ADDRESSING_STYLE = os.environ.get("AWS_S3_ADDRESSING_STYLE","auto")
 
 INSTALLED_APPS = []
 # Application definition
