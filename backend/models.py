@@ -46,7 +46,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 
 class Category(models.Model):
-    name = models.CharField(max_length=25)
+    name = models.CharField(unique=True, max_length=25)
     description = models.CharField(null=True, max_length=255)
 
     class Meta:
@@ -114,7 +114,7 @@ def get_tags_default():
 
 class Request(models.Model):
     name = models.CharField(max_length=100)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, default=-1)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.CharField(max_length=255)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     # just aray of strings on request
@@ -122,9 +122,7 @@ class Request(models.Model):
         models.CharField(null=True, max_length=50),
         default=get_tags_default
     )
-    # images = ArrayField(
-    #     models.CharField(blank=True, max_length=255)
-    # )
+    website = models.CharField(max_length=255, null=True)
     date_created = models.DateTimeField(auto_now_add=True)
     date_updated = models.DateTimeField(auto_now=True)
     date_approved = models.DateTimeField(blank=True, null=True)
@@ -147,12 +145,12 @@ class Request(models.Model):
 
 class Place(models.Model):
     name = models.CharField(unique=True, max_length=255)
-    category = models.ForeignKey(
-        Category, on_delete=models.PROTECT, default=-1)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.TextField(max_length=255, null=True)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     tags = models.ManyToManyField(Tag, related_name="places")
     # images_set_id = models.CharField(blank=True, null=True, max_length=255)
+    website = models.CharField(max_length=255, null=True)
     class Meta:
         verbose_name_plural = 'Places'
 

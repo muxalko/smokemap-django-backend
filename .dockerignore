@@ -1,0 +1,12 @@
+.git
+.gitignore
+.vercel
+.env*
+*.env
+__pycache__
+*.py[cod]
+*.log*
+logs/
+venv/
+.venv/
+staticfiles_build/
