@@ -61,4 +61,4 @@ class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
     class Meta:
         model = Place
         geo_field = "location"
-        fields = ['place_id', 'name','category','description','address', 'tags']
+        fields = ['place_id', 'name','category','description','address', 'tags', 'website']

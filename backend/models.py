@@ -122,9 +122,7 @@ class Request(models.Model):
         models.CharField(null=True, max_length=50),
         default=get_tags_default
     )
-    # images = ArrayField(
-    #     models.CharField(blank=True, max_length=255)
-    # )
+    website = models.CharField(max_length=255, null=True)
     date_created = models.DateTimeField(auto_now_add=True)
     date_updated = models.DateTimeField(auto_now=True)
     date_approved = models.DateTimeField(blank=True, null=True)
@@ -152,6 +150,7 @@ class Place(models.Model):
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     tags = models.ManyToManyField(Tag, related_name="places")
     # images_set_id = models.CharField(blank=True, null=True, max_length=255)
+    website = models.CharField(max_length=255, null=True)
     class Meta:
         verbose_name_plural = 'Places'
 

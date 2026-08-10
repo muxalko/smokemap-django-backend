@@ -49,6 +49,7 @@ def import_csv(file_path):
             description = 'Description for wonderful place #'+str(index),
             address = address,
             tags = ['tag1', 'tag2', 'tag3'],
+            website = 'https://www.google.com',
             requested_by = 'test script',
         )
 
