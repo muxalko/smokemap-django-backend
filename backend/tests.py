@@ -1,5 +1,11 @@
+from io import StringIO
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+from django.core.management.base import CommandError
 from django.core.management import call_command
+from django.core.management.utils import get_random_string
 from django.test import TestCase, override_settings
 
 from .models import Address, Category, Location, Place
@@ -55,6 +61,62 @@ class MockDataCommandTests(TestCase):
                 "Mock Georgetown Rooftop",
             },
         )
+
+
+class LocalAdminCommandTests(TestCase):
+    @override_settings(DEBUG=True)
+    @patch("backend.management.commands.create_local_admin.getpass")
+    def test_create_local_admin_is_repeatable(self, mock_getpass):
+        first_password = f"{get_random_string(40)}A9!"
+        second_password = f"{get_random_string(40)}B8!"
+        mock_getpass.side_effect = [
+            first_password,
+            first_password,
+            second_password,
+            second_password,
+        ]
+        email = "local-admin@smokemap.test"
+
+        call_command("create_local_admin", email=email, stdout=StringIO())
+        call_command("create_local_admin", email=email, stdout=StringIO())
+
+        User = get_user_model()
+        self.assertEqual(User.objects.filter(email=email).count(), 1)
+        user = User.objects.get(email=email)
+        self.assertTrue(user.is_active)
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        self.assertTrue(user.check_password(second_password))
+        self.assertTrue(user.groups.filter(name="admins").exists())
+        self.assertEqual(Group.objects.filter(name="admins").count(), 1)
+
+    @override_settings(DEBUG=True)
+    @patch("backend.management.commands.create_local_admin.getpass")
+    def test_create_local_admin_rejects_mismatched_passwords(self, mock_getpass):
+        password = f"{get_random_string(40)}A9!"
+        mock_getpass.side_effect = [password, f"{password}different"]
+
+        with self.assertRaisesMessage(CommandError, "Passwords do not match"):
+            call_command(
+                "create_local_admin",
+                email="local-admin@smokemap.test",
+                stdout=StringIO(),
+            )
+
+        User = get_user_model()
+        self.assertFalse(User.objects.filter(email="local-admin@smokemap.test").exists())
+
+    @override_settings(DEBUG=False)
+    @patch("backend.management.commands.create_local_admin.getpass")
+    def test_create_local_admin_refuses_non_debug_mode(self, mock_getpass):
+        with self.assertRaisesMessage(CommandError, "DEBUG is enabled"):
+            call_command(
+                "create_local_admin",
+                email="local-admin@smokemap.test",
+                stdout=StringIO(),
+            )
+
+        mock_getpass.assert_not_called()
 
 
 class UsersManagersTests(TestCase):
