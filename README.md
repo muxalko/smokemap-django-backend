@@ -2,6 +2,19 @@
 
 # Django + Vercel
 
+## Local mock map data
+
+With the workspace Docker Compose stack running, seed three deterministic fictional
+places inside the frontend's default Washington, DC viewport:
+
+```sh
+docker compose exec -T backend python manage.py seed_mock_data
+```
+
+Run the command from the workspace root. It is development-only, performs no
+external geocoding, and can be run repeatedly without creating duplicate places.
+Refresh `http://localhost:3000` after seeding to see the markers.
+
 This example shows how to use Django 4 on Vercel with Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
 
 ## Demo
