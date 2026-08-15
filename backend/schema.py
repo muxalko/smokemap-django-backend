@@ -212,10 +212,6 @@ class Query(graphene.ObjectType):
 
     # @login_required
     def resolve_requests_to_approve(root, info, **kwargs):
-        # logger.debug("context:",vars(info.context))
-        logger.debug("headers: %s",info.context.headers)
-
-        # logger.debug("csrf token: %s",info.context.headers['X-Csrftoken'])
         if not info.context.user.is_authenticated:
             raise ValidationError(("You must be logged in to perform this action"),)
         # Querying a list
