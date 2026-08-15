@@ -122,7 +122,6 @@ if os.getenv("SETTINGS_MODE") == "local":
             "graphql_jwt.middleware.JSONWebTokenMiddleware",
         ],
     }
-    LOG_PATH = os.path.join(BASE_DIR, "logs/")
     LOGGING = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -143,42 +142,6 @@ if os.getenv("SETTINGS_MODE") == "local":
                 "class": "logging.StreamHandler",
                 "formatter": "standard"
             },
-            "django.log": {
-                "level": "DEBUG",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": LOG_PATH + "django.log",
-                "maxBytes": 1024*1024*5, # 5MB
-                "backupCount": 5,
-                "formatter": "verbose",
-            },
-            "backend_schema.log": {
-                "level": "DEBUG",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": LOG_PATH + "backend_schema.log",
-                "maxBytes": 1024*1024*5, # 5MB
-                "backupCount": 5,
-                "formatter": "verbose",
-            },
-            "backend_stats.log": {
-                "level": "DEBUG",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": LOG_PATH + "backend_stats.log",
-                "maxBytes": 1024*1024*5, # 5MB
-                "backupCount": 5,
-                "formatter": "verbose",
-            },
-            "django_error.log": {
-                "level": "DEBUG",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": LOG_PATH + "django_error.log",
-                "formatter": "standard"
-            },
-            "info.log": {
-                "level": "DEBUG",
-                "class": "logging.handlers.RotatingFileHandler",
-                "filename": LOG_PATH + "info.log",
-                "formatter": "standard"
-            },
             'mail_admins': {
                 'level': 'ERROR',
                 'class': 'django.utils.log.AdminEmailHandler'
@@ -192,7 +155,7 @@ if os.getenv("SETTINGS_MODE") == "local":
                 "formatter": "simple",
             },
             "django.request": {
-                "handlers": ["django_error.log", "console"],
+                "handlers": ["console"],
                 "level": "DEBUG",
                 "propagate": True,
             },
@@ -202,13 +165,13 @@ if os.getenv("SETTINGS_MODE") == "local":
                 "propagate": True,
             },
             "backend.schema": {
-                "handlers": ["backend_schema.log"],
+                "handlers": ["console"],
                 "level": "DEBUG",
                 "propagate": True,
                 "formatter": "verbose",
             },
             "backend.stats": {
-                "handlers": ["backend_stats.log"],
+                "handlers": ["console"],
                 "level": "DEBUG",
                 "propagate": True,
                 "formatter": "verbose",
