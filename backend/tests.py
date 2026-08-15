@@ -1,7 +1,8 @@
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.management import call_command
+from django.test import TestCase, override_settings
 
-from .models import Category
+from .models import Address, Category, Location, Place
 
 
 class CategoryProvisioningTests(TestCase):
@@ -19,6 +20,42 @@ class CategoryProvisioningTests(TestCase):
                 "Other",
             },
         )
+
+
+class MockDataCommandTests(TestCase):
+    @override_settings(DEBUG=True)
+    def test_seed_mock_data_is_idempotent_and_visible_as_geojson(self):
+        call_command("seed_mock_data")
+        first_place_ids = set(Place.objects.values_list("id", flat=True))
+
+        call_command("seed_mock_data")
+
+        self.assertEqual(Place.objects.count(), 3)
+        self.assertEqual(Address.objects.count(), 3)
+        self.assertEqual(Location.objects.count(), 3)
+        self.assertSetEqual(
+            set(Place.objects.values_list("id", flat=True)),
+            first_place_ids,
+        )
+
+        response = self.client.get(
+            "/locations/",
+            {"in_bbox": "-78,38,-76,40"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "FeatureCollection")
+        self.assertEqual(len(payload["features"]), 3)
+        self.assertSetEqual(
+            {feature["properties"]["name"] for feature in payload["features"]},
+            {
+                "Mock Capitol Patio",
+                "Mock Dupont Lounge",
+                "Mock Georgetown Rooftop",
+            },
+        )
+
 
 class UsersManagersTests(TestCase):
 
