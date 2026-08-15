@@ -15,6 +15,21 @@ Run the command from the workspace root. It is development-only, performs no
 external geocoding, and can be run repeatedly without creating duplicate places.
 Refresh `http://localhost:3000` after seeding to see the markers.
 
+## Local moderation administrator
+
+Create or update a local-only administrator with an interactively entered password:
+
+```sh
+docker compose exec backend python manage.py create_local_admin \
+  --email admin@smokemap.local
+```
+
+Run the command from the workspace root without `-T` so the password prompt can
+read from the terminal. The password is not accepted as a command-line argument
+or printed. The command refuses to run outside debug mode. After provisioning,
+sign in at `http://localhost:3000/api/auth/signin` and open
+`http://localhost:3000/requests` to review pending submissions.
+
 This example shows how to use Django 4 on Vercel with Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
 
 ## Demo
