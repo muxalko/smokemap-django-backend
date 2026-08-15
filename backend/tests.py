@@ -1,14 +1,33 @@
 from io import StringIO
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.management.base import CommandError
 from django.core.management import call_command
 from django.core.management.utils import get_random_string
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from .models import Address, Category, Location, Place
+
+
+class LocalLoggingTests(SimpleTestCase):
+    def test_local_logging_uses_console_handlers(self):
+        for handler in settings.LOGGING["handlers"].values():
+            self.assertNotIn("filename", handler)
+
+        for logger_name in (
+            "django",
+            "django.request",
+            "django.db.backends",
+            "backend.schema",
+            "backend.stats",
+        ):
+            self.assertEqual(
+                settings.LOGGING["loggers"][logger_name]["handlers"],
+                ["console"],
+            )
 
 
 class CategoryProvisioningTests(TestCase):
