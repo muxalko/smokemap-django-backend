@@ -198,7 +198,7 @@ if os.getenv("SETTINGS_MODE") == "local":
             },
             "django.db.backends": {
                 "handlers": ["console"],
-                "level": "DEBUG",
+                "level": "INFO",
                 "propagate": True,
             },
             "backend.schema": {
@@ -337,7 +337,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
             },
             "django.db.backends": {
                 "handlers": ["console"],
-                "level": "DEBUG",
+                "level": "INFO",
                 "propagate": True,
             },
             "backend.schema": {
