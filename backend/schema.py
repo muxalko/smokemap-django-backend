@@ -1,21 +1,33 @@
 import graphene
 import graphql_jwt
 from graphene_django import DjangoObjectType
-from .models import Category, Tag, Request, Address, Place, Image, Location
+from .models import (
+    Address,
+    Category,
+    CustomUser,
+    Image,
+    Location,
+    ModerationAudit,
+    Place,
+    Request,
+    Tag,
+)
+from .permissions import (
+    FORBIDDEN,
+    NOT_FOUND,
+    graphql_authorization_error,
+    is_moderator,
+    require_active_user,
+    require_administrator,
+    require_moderator,
+    role_for_user,
+)
 from django.core.exceptions import ValidationError
 import graphql_geojson
 from django.utils import timezone
+from django.db import transaction
 
-from graphene.types import generic
 from django.contrib.gis import geos
-from django.conf import settings
-
-import boto3
-from botocore.exceptions import ClientError
-from botocore.config import Config
-from django.core.management.utils import get_random_string
-from .models import CustomUser
-from django.contrib.auth.models import Group
 
 import logging
 logger = logging.getLogger( __name__ )
@@ -27,18 +39,7 @@ class UserType(DjangoObjectType):
     # that is returned in web client for authorzation of users
     role = graphene.String()
     def resolve_role(self, info):
-        customUser = CustomUser.objects.get(email=self)
-        groups = Group.objects.filter(user=customUser)
-        logger.debug("groups: %s",groups)
-        # wrap in list(), because QuerySet is not JSON serializable
-        isAdmin = False 
-        for group in groups:
-            if group.name == "admins":
-                isAdmin = True
-        if isAdmin:
-            return 'admin'
-        else:
-            return 'guest'
+        return role_for_user(self)
     
     class Meta:
         model = CustomUser
@@ -69,7 +70,7 @@ class TagType(DjangoObjectType):
 class ImageType(DjangoObjectType):
     class Meta:
         model = Image
-        fields = ('id', 'name', 'url', 'metadata', 'request')
+        fields = ('id', 'name', 'url', 'metadata')
 
 class AddressType(graphql_geojson.GeoJSONType):
     class Meta:
@@ -86,6 +87,19 @@ class AddressType(graphql_geojson.GeoJSONType):
         # )
 
 class RequestType(DjangoObjectType):
+    approved_by = graphene.String(
+        description="Deprecated compatibility field containing the reviewer ID."
+    )
+    requested_by = graphene.String(
+        description="Deprecated compatibility field containing the owner ID."
+    )
+
+    def resolve_approved_by(self, info):
+        return str(self.reviewed_by_id) if self.reviewed_by_id else None
+
+    def resolve_requested_by(self, info):
+        return str(self.owner_id) if self.owner_id else None
+
     class Meta:
         model = Request
         fields = (
@@ -101,9 +115,7 @@ class RequestType(DjangoObjectType):
             'date_updated',
             'date_approved',
             'approved',
-            'approved_by',
             'approved_comment',
-            'requested_by'
         )
 # TODO: make all methods use **kwargs to use decorator
 ##############################DECORATORS##############################
@@ -170,9 +182,7 @@ class Query(graphene.ObjectType):
         name=graphene.String()
     )
 
-    s3_presigned_url = generic.GenericScalar(
-        # image_type=graphene.String()
-        )
+    s3_presigned_url = graphene.JSONString()
     # s3_presigned_url = graphene.Field(
     #     url=graphene.String(),
     #     fields=graphene.Field(
@@ -194,40 +204,43 @@ class Query(graphene.ObjectType):
         return Tag.objects.all()
       
     def resolve_addresses(root, info):
-        # Querying a list
-        return Address.objects.all()
+        return Address.objects.filter(place__isnull=False).distinct()
     
     def resolve_images(root, info):
-        # Querying a list
-        return Image.objects.all()
+        return Image.objects.filter(place__isnull=False)
     
     # def resolve_images_by_set_id(root, info, set_id):
     #     # Querying a list
     #     return Image.objects.filter(set_id=set_id)
 
-    # @anonymous_return(AuthenticationRequired.default_message)
-    # def resolve_requests(root, info):
-    #     # Querying a list
-    #     return Request.objects.all()
+    def resolve_requests(root, info):
+        user = require_active_user(info)
+        requests = Request.objects.filter(approved=False)
+        if is_moderator(user):
+            return requests
+        return requests.filter(owner=user)
 
     # @login_required
     def resolve_requests_to_approve(root, info, **kwargs):
-        if not info.context.user.is_authenticated:
-            raise ValidationError(("You must be logged in to perform this action"),)
-        # Querying a list
+        require_moderator(info)
         return Request.objects.filter(approved=False)
 
     def resolve_request_by_id(root, info, id):
-        if not info.context.user.is_authenticated:
-            raise ValidationError(("You must be logged in to perform this action"),)
-        # Querying a request
-        return Request.objects.get(pk=id)
+        user = require_active_user(info)
+        requests = Request.objects.filter(approved=False)
+        if not is_moderator(user):
+            requests = requests.filter(owner=user)
+        request = requests.filter(pk=id).first()
+        if request is None:
+            graphql_authorization_error("Submission not found", NOT_FOUND)
+        return request
 
     def resolve_requests_by_name(root, info, name):
-        if not info.context.user.is_authenticated:
-            raise ValidationError(("You must be logged in to perform this action"),)
-        # Querying a named
-        return Request.objects.filter(name=name)
+        user = require_active_user(info)
+        requests = Request.objects.filter(approved=False, name=name)
+        if not is_moderator(user):
+            requests = requests.filter(owner=user)
+        return requests.first()
 
     def resolve_places(root, info):
         # Querying a list
@@ -250,46 +263,10 @@ class Query(graphene.ObjectType):
         return Place.objects.filter(name__startswith=name)
     
     def resolve_s3_presigned_url(root, info):
-        logger.debug("Creating Boto3 client for S3 manipulations")
-        s3_client = boto3.client("s3",
-                                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
-                                    region_name=settings.AWS_S3_REGION_NAME,
-                                    endpoint_url=settings.AWS_S3_ENDPOINT_URL or None,
-                                    config=Config(
-                                        signature_version='s3v4',
-                                        s3={'addressing_style': settings.AWS_S3_ADDRESSING_STYLE},
-                                    ))
-        
-        object_name = get_random_string(length=16, allowed_chars='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
-        logger.debug("Generated name for S3 upload object: %s", object_name)
-        
-        try:
-            response = s3_client.generate_presigned_post(settings.AWS_STORAGE_BUCKET_NAME,
-                                                        # object_name,
-                                                        # ${filename} will be supplied by the client
-                                                        object_name+"/${filename}",
-                                                        # "uploads/${filename}",
-                                                        # Fields=None,
-                                                        Fields = {"Content-Type": "image/jpeg"},
-                                                        # Fields = {"acl": "public-read", "Content-Type": "image/jpeg"},
-                                                        # Fields={"Content-Type": "image/{}".format(image_type)},
-                                                        # Conditions=None,
-                                                        Conditions=[
-                                                            # {"acl": "public-read" },
-                                                            {"bucket": settings.AWS_STORAGE_BUCKET_NAME },
-                                                            ["starts-with", "$key", object_name+"/"],
-                                                            ["starts-with", "$Content-Type", "image/"]
-                                                            ],
-                                                        # Conditions=[["starts-with", "$key", "uploads/"]],
-                                                        ExpiresIn=60)
-        except ClientError as e:
-            logger.debug(e)
-            return None
-        print (response)
-        # The response contains the presigned URL and required fields
-       
-        return response
+        graphql_authorization_error(
+            "Uploads are disabled until owner-bound upload intents are available",
+            FORBIDDEN,
+        )
      
 class RequestInput(graphene.InputObjectType):
     name = graphene.String()
@@ -304,10 +281,12 @@ class CreateRequest(graphene.Mutation):
         input = RequestInput(required=True)
 
     request = graphene.Field(RequestType)
-    
+
     @classmethod
+    @transaction.atomic
     def mutate(cls, root, info, input):
-        
+        user = require_active_user(info)
+
         # apply validation steps
         validated = True
         validation_message = ''
@@ -392,7 +371,7 @@ class CreateRequest(graphene.Mutation):
             request.tags = input.tags
             request.website = input.website
             request.address = myaddress
-            request.requested_by = info.context.META.get('HTTP_X_FORWARDED_FOR', info.context.META.get('REMOTE_ADDR', '')).split(',')[0].strip()
+            request.owner = user
         
             # request.imageurl = input.imageurl
 
@@ -418,17 +397,24 @@ class DeleteRequest(graphene.Mutation):
 
     @classmethod
     def mutate(cls, root, info, id):
-        if not info.context.user.is_authenticated:
-            raise ValidationError(("You must be logged in to perform this action"),)
-        request = Request.objects.get(pk=id)
+        actor = require_administrator(info)
+        request = Request.objects.filter(pk=id, approved=False).first()
+        if request is None:
+            graphql_authorization_error("Submission not found", NOT_FOUND)
 
-        request.delete()
+        with transaction.atomic():
+            ModerationAudit.objects.create(
+                actor=actor,
+                action=ModerationAudit.Action.HARD_DELETE,
+                target_type="request",
+                target_id=request.pk,
+            )
+            request.delete()
         return cls(ok=True)
 
 
 class RequestApproveInput(graphene.InputObjectType):
     approved_comment = graphene.String()
-    approved_by = graphene.String()
 
 
 class ApproveRequest(graphene.Mutation):
@@ -441,21 +427,27 @@ class ApproveRequest(graphene.Mutation):
     
     @classmethod
     def mutate(cls, root, info, input, id):
+        actor = require_moderator(info)
         logger.debug("Start approval process for request id: %s", id)
-        # if not info.context['user']['is_authenticated']:
-        if not info.context.user.is_authenticated:
-            raise ValidationError(("You must be logged in to perform this action"),)
-        
+
         # apply validation steps
         validated = True
         validation_message = ''
-        request = Request.objects.get(pk=id)
-        logger.debug(request)
-        if request.approved:
-            raise ValidationError(
-                ('The request has already been approved.'),
-                params={'approved_by': request.approved_by},
+        request = Request.objects.filter(pk=id, approved=False).first()
+        if request is None:
+            graphql_authorization_error("Submission not found", NOT_FOUND)
+        if request.owner_id == actor.pk:
+            ModerationAudit.objects.create(
+                actor=actor,
+                action=ModerationAudit.Action.APPROVE,
+                target_type="request",
+                target_id=request.pk,
+                outcome="denied_self_review",
             )
+            graphql_authorization_error(
+                "Reviewers cannot approve their own submission", FORBIDDEN
+            )
+        logger.debug(request)
 
         logger.debug("Check if place already exists: %s %s", request.name, request.address)
         # Check if place already exists
@@ -555,10 +547,17 @@ class ApproveRequest(graphene.Mutation):
         # set request as approved
         request.approved = True
         request.date_approved = timezone.now()
-        request.approved_by = input.approved_by
+        request.reviewed_by = actor
         request.approved_comment = input.approved_comment
 
         request.save()
+
+        ModerationAudit.objects.create(
+            actor=actor,
+            action=ModerationAudit.Action.APPROVE,
+            target_type="request",
+            target_id=request.pk,
+        )
 
         logger.debug("The request (id=%s) was updated with: %s",request.id, newPlace)
 
@@ -578,15 +577,10 @@ class CreateImage(graphene.Mutation):
 
     @classmethod
     def mutate(cls, root, info, input):
-        
-        image = Image()
-        image.request = Request.objects.get(pk=input.request_id)
-        image.name = input.name
-        image.url = input.url
-        image.metadata = input.metadata
-        image.save()
-
-        return cls(image=image)
+        graphql_authorization_error(
+            "Uploads are disabled until owner-bound upload intents are available",
+            FORBIDDEN,
+        )
 
 
 class ObtainJSONWebToken(graphql_jwt.JSONWebTokenMutation):

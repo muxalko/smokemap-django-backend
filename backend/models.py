@@ -5,6 +5,7 @@ from django.contrib.gis.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.gis import geos
 from django.utils import timezone
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from .managers import CustomUserManager
 # Create your models here.
@@ -131,6 +132,20 @@ class Request(models.Model):
     approved_by = models.CharField(
         auto_created=True, blank=True, null=True, max_length=100)
     requested_by = models.CharField(max_length=255, null=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="submissions",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_submissions",
+    )
     # images_set_id = models.CharField(blank=True, null=True, max_length=255)
     # the item belongs to one category
     # if having a category is required please remove blank=True
@@ -142,6 +157,29 @@ class Request(models.Model):
 
     def __str__(self):
         return "{}: {} - {}, {}".format(self.date_created, self.name, self.description, self.address.addressString)
+
+
+class ModerationAudit(models.Model):
+    class Action(models.TextChoices):
+        APPROVE = "approve", "Approve"
+        HARD_DELETE = "hard_delete", "Hard delete"
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="moderation_audits",
+    )
+    action = models.CharField(max_length=32, choices=Action.choices)
+    target_type = models.CharField(max_length=32)
+    target_id = models.PositiveBigIntegerField()
+    outcome = models.CharField(max_length=32, default="succeeded")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return "{}:{}:{}".format(self.action, self.target_type, self.target_id)
 
 class Place(models.Model):
     name = models.CharField(unique=True, max_length=255)

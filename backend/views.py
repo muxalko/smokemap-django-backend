@@ -3,6 +3,7 @@
 from backend.models import Place, Address, Location
 from rest_framework import viewsets, permissions, mixins
 from backend.serializers import PlaceSerializer, AddressSerializer, LocationSerializer
+from backend.permissions import IsAdministratorOrReadOnly
 from rest_framework_gis.filters import InBBoxFilter
 
 class LocationViewSet(mixins.RetrieveModelMixin,
@@ -28,7 +29,7 @@ class AddressViewSet(mixins.RetrieveModelMixin,
     """
     API endpoint that allows addresses to be viewed.
     """
-    queryset = Address.objects.all()
+    queryset = Address.objects.filter(place__isnull=False).distinct()
     serializer_class = AddressSerializer
     permission_classes = [permissions.AllowAny,]
     bbox_filter_field = 'location'
@@ -57,4 +58,4 @@ class PlaceViewSet(viewsets.ModelViewSet):
         return places_queryset
     
     serializer_class = PlaceSerializer
-    permission_classes = [permissions.AllowAny,]
+    permission_classes = [IsAdministratorOrReadOnly]
