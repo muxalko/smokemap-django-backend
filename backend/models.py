@@ -7,6 +7,7 @@ from django.contrib.gis import geos
 from django.utils import timezone
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
+from django.utils.crypto import constant_time_compare
 from .managers import CustomUserManager
 # Create your models here.
 
@@ -180,6 +181,46 @@ class ModerationAudit(models.Model):
 
     def __str__(self):
         return "{}:{}:{}".format(self.action, self.target_type, self.target_id)
+
+
+class RefreshTokenFamily(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="refresh_token_families",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(blank=True, null=True)
+    compromised_at = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return "refresh-family:{}:{}".format(self.pk, self.user_id)
+
+
+class RefreshTokenCredential(models.Model):
+    family = models.ForeignKey(
+        RefreshTokenFamily,
+        on_delete=models.CASCADE,
+        related_name="credentials",
+    )
+    token_digest = models.CharField(max_length=64, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used_at = models.DateTimeField(blank=True, null=True)
+    revoked_at = models.DateTimeField(blank=True, null=True)
+    successor = models.OneToOneField(
+        "self",
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="predecessor",
+    )
+
+    def matches_digest(self, digest):
+        return constant_time_compare(self.token_digest, digest)
+
+    def __str__(self):
+        return "refresh-credential:{}:{}".format(self.pk, self.family_id)
 
 class Place(models.Model):
     name = models.CharField(unique=True, max_length=255)

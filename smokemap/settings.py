@@ -110,6 +110,12 @@ if os.getenv("SETTINGS_MODE") == "local":
         "JWT_REFRESH_EXPIRATION_DELTA": timedelta(days=7),    
         "JWT_SECRET_KEY": os.environ["DJANGO_SECRET_KEY"],
         "JWT_ALGORITHM": "HS256",
+        "JWT_ALLOW_REFRESH": False,
+        "JWT_PAYLOAD_HANDLER": "backend.tokens.access_token_payload",
+        "JWT_ENCODE_HANDLER": "backend.tokens.encode_access_token",
+        "JWT_DECODE_HANDLER": "backend.tokens.decode_access_token",
+        "JWT_PAYLOAD_GET_USERNAME_HANDLER": "backend.tokens.subject_from_payload",
+        "JWT_GET_USER_BY_NATURAL_KEY_HANDLER": "backend.tokens.user_from_subject",
         "JWT_COOKIE_SECURE": False,
         # "JWT_COOKIE_DOMAIN": "smokemap.org",
         "JWT_COOKIE_SAMESITE": "Lax"
@@ -119,7 +125,7 @@ if os.getenv("SETTINGS_MODE") == "local":
     GRAPHENE = {
         "SCHEMA": "backend.schema.schema",
         "MIDDLEWARE": [
-            "graphql_jwt.middleware.JSONWebTokenMiddleware",
+            "backend.graphql_auth.BearerAuthenticationMiddleware",
         ],
     }
     LOGGING = {
@@ -169,6 +175,11 @@ if os.getenv("SETTINGS_MODE") == "local":
                 "level": "DEBUG",
                 "propagate": True,
                 "formatter": "verbose",
+            },
+            "backend.tokens": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": False,
             },
             "backend.stats": {
                 "handlers": ["console"],
@@ -229,7 +240,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
         "SCHEMA": "backend.schema.schema",
         "RELAY_CONNECTION_MAX_LIMIT": 100,
         "MIDDLEWARE": [
-            "graphql_jwt.middleware.JSONWebTokenMiddleware",
+            "backend.graphql_auth.BearerAuthenticationMiddleware",
             # "backend.graphql.middleware.DisableIntrospectionMiddleware",
         ],
     }
@@ -256,6 +267,12 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
         "JWT_REFRESH_EXPIRATION_DELTA": timedelta(days=7),    
         "JWT_SECRET_KEY": os.environ["DJANGO_SECRET_KEY"],
         "JWT_ALGORITHM": "HS256",
+        "JWT_ALLOW_REFRESH": False,
+        "JWT_PAYLOAD_HANDLER": "backend.tokens.access_token_payload",
+        "JWT_ENCODE_HANDLER": "backend.tokens.encode_access_token",
+        "JWT_DECODE_HANDLER": "backend.tokens.decode_access_token",
+        "JWT_PAYLOAD_GET_USERNAME_HANDLER": "backend.tokens.subject_from_payload",
+        "JWT_GET_USER_BY_NATURAL_KEY_HANDLER": "backend.tokens.user_from_subject",
         "JWT_COOKIE_SECURE": False,
         # "JWT_COOKIE_DOMAIN": "smokemap.org",
         "JWT_COOKIE_SAMESITE": "Lax"
@@ -308,6 +325,11 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "staging":
                 "level": "DEBUG",
                 "propagate": True,
                 "formatter": "verbose",
+            },
+            "backend.tokens": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": False,
             },
             "backend.stats": {
                 "handlers": ["console"],
@@ -363,7 +385,7 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
         "SCHEMA": "backend.schema.schema",
         "RELAY_CONNECTION_MAX_LIMIT": 100,
         "MIDDLEWARE": [
-            "graphql_jwt.middleware.JSONWebTokenMiddleware",
+            "backend.graphql_auth.BearerAuthenticationMiddleware",
             "backend.graphql.middleware.DisableIntrospectionMiddleware",
         ],
     }
@@ -390,6 +412,12 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
         "JWT_REFRESH_EXPIRATION_DELTA": timedelta(days=7),    
         "JWT_SECRET_KEY": os.environ["DJANGO_SECRET_KEY"],
         "JWT_ALGORITHM": "HS256",
+        "JWT_ALLOW_REFRESH": False,
+        "JWT_PAYLOAD_HANDLER": "backend.tokens.access_token_payload",
+        "JWT_ENCODE_HANDLER": "backend.tokens.encode_access_token",
+        "JWT_DECODE_HANDLER": "backend.tokens.decode_access_token",
+        "JWT_PAYLOAD_GET_USERNAME_HANDLER": "backend.tokens.subject_from_payload",
+        "JWT_GET_USER_BY_NATURAL_KEY_HANDLER": "backend.tokens.user_from_subject",
         "JWT_COOKIE_SECURE": False,
         # "JWT_COOKIE_DOMAIN": "smokemap.org",
         "JWT_COOKIE_SAMESITE": "Lax"
@@ -443,6 +471,11 @@ elif os.getenv("VERCEL_GIT_COMMIT_REF") == "main":
                 "propagate": True,
                 "formatter": "verbose",
             },
+            "backend.tokens": {
+                "handlers": ["console"],
+                "level": "INFO",
+                "propagate": False,
+            },
             "backend.stats": {
                 "handlers": ["console"],
                 "level": "INFO",
@@ -490,6 +523,9 @@ INSTALLED_APPS += [
     "django.contrib.staticfiles", # Required for GraphiQL
     "corsheaders", # CORS support
     "graphene_django", # graphql
+    # Retained for compatibility with databases that already applied the
+    # third-party refresh-token migrations. Smokemap does not expose its
+    # mutations or use its plaintext refresh-token model.
     "graphql_jwt.refresh_token.apps.RefreshTokenConfig",
     "rest_framework", # Django Rest Framework
     # "rest_framework.authtoken", # Token authentication
@@ -691,16 +727,11 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
      "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
-        # "rest_framework.authentication.BasicAuthentication",
-        # "rest_framework.authentication.TokenAuthentication",
-        # "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "backend.authentication.BearerJSONWebTokenAuthentication",
     ],
 }
 
 AUTHENTICATION_BACKENDS = [
-    "graphql_jwt.backends.JSONWebTokenBackend",
-    # Needed to login by username in Django admin, regardless of `allauth`
     "django.contrib.auth.backends.ModelBackend",
     # "allauth.account.auth_backends.AuthenticationBackend",
     ]
