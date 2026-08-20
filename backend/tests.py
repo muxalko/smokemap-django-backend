@@ -1,6 +1,7 @@
 from io import StringIO
 import json
 from datetime import timedelta
+from importlib import import_module
 from threading import Barrier, Thread
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -706,6 +707,17 @@ class TokenLifecycleTests(TestCase):
 
 class ConcurrentRefreshTests(TransactionTestCase):
     reset_sequences = True
+
+    def _post_teardown(self):
+        super()._post_teardown()
+        provisional_categories = import_module(
+            "backend.migrations.0001_initial"
+        ).PROVISIONAL_CATEGORIES
+        for name, description in provisional_categories:
+            Category.objects.update_or_create(
+                name=name,
+                defaults={"description": description},
+            )
 
     def test_concurrent_rotation_allows_one_success_and_revokes_on_reuse(self):
         user = get_user_model().objects.create_user(
