@@ -2,6 +2,20 @@
 
 # Django + Vercel
 
+## Checks and tests
+
+Docker Compose from the workspace root remains the canonical local environment:
+
+```sh
+make check
+make test
+make test-backend-fresh
+```
+
+Pull requests and pushes to `development` independently run the Django system
+check and complete backend suite against an isolated PostGIS service. CI also
+scans the full Git history with Gitleaks and redacts any detected values.
+
 ## Local mock map data
 
 With the workspace Docker Compose stack running, seed three deterministic fictional
