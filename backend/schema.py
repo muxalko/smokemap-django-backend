@@ -1,5 +1,6 @@
 import graphene
-import graphql_jwt
+from graphene.types.generic import GenericScalar
+from graphql import GraphQLError
 from graphene_django import DjangoObjectType
 from .models import (
     Address,
@@ -23,9 +24,20 @@ from .permissions import (
     role_for_user,
 )
 from django.core.exceptions import ValidationError
+from django.contrib.auth import authenticate
 import graphql_geojson
 from django.utils import timezone
 from django.db import transaction
+from .tokens import (
+    INVALID_TOKEN,
+    TokenLifecycleError,
+    decode_access_token,
+    issue_token_pair,
+    log_authentication_event,
+    refresh_token_from_request,
+    revoke_refresh_family,
+    rotate_refresh_token,
+)
 
 from django.contrib.gis import geos
 
@@ -583,19 +595,92 @@ class CreateImage(graphene.Mutation):
         )
 
 
-class ObtainJSONWebToken(graphql_jwt.JSONWebTokenMutation):
+class ObtainJSONWebToken(graphene.Mutation):
+    payload = GenericScalar(required=True)
+    token = graphene.String(required=True)
+    refresh_token = graphene.String(required=True)
+    refresh_expires_in = graphene.Int(required=True)
     user = graphene.Field(UserType)
 
+    class Arguments:
+        email = graphene.String(required=True)
+        password = graphene.String(required=True)
+
     @classmethod
-    def resolve(cls, root, info, **kwargs):
-        logger.debug("context user: %s", info.context.user)
-        return cls(user=info.context.user)
+    def mutate(cls, root, info, email, password):
+        user = authenticate(request=info.context, username=email, password=password)
+        if user is None or not user.is_active:
+            log_authentication_event("login", "denied", context=info.context)
+            raise GraphQLError(
+                "Invalid credentials",
+                extensions={"code": "AUTHENTICATION_FAILED"},
+            )
+        token_pair = issue_token_pair(user)
+        log_authentication_event(
+            "login", "succeeded", actor_id=user.pk, context=info.context
+        )
+        return cls(user=user, **token_pair)
+
+
+class Refresh(graphene.Mutation):
+    payload = GenericScalar(required=True)
+    token = graphene.String(required=True)
+    refresh_token = graphene.String(required=True)
+    refresh_expires_in = graphene.Int(required=True)
+
+    class Arguments:
+        refresh_token = graphene.String()
+
+    @classmethod
+    def mutate(cls, root, info, refresh_token=None):
+        raw_token = refresh_token_from_request(info, refresh_token)
+        try:
+            return cls(**rotate_refresh_token(raw_token, info.context))
+        except TokenLifecycleError as error:
+            raise GraphQLError(str(error), extensions={"code": error.code}) from error
+
+
+class Revoke(graphene.Mutation):
+    revoked = graphene.Int(required=True)
+
+    class Arguments:
+        refresh_token = graphene.String()
+
+    @classmethod
+    def mutate(cls, root, info, refresh_token=None):
+        raw_token = refresh_token_from_request(info, refresh_token)
+        try:
+            return cls(revoked=revoke_refresh_family(raw_token, info.context))
+        except TokenLifecycleError as error:
+            log_authentication_event("revoke", "denied", context=info.context)
+            raise GraphQLError(str(error), extensions={"code": error.code}) from error
+
+
+class Verify(graphene.Mutation):
+    payload = GenericScalar(required=True)
+
+    class Arguments:
+        token = graphene.String(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, token):
+        try:
+            payload = decode_access_token(token, info.context)
+            log_authentication_event(
+                "verify", "succeeded", actor_id=payload["sub"], context=info.context
+            )
+            return cls(payload=payload)
+        except TokenLifecycleError as error:
+            log_authentication_event("verify", "denied", context=info.context)
+            raise GraphQLError(
+                "Invalid access token", extensions={"code": INVALID_TOKEN}
+            ) from error
     
 class Mutation(graphene.ObjectType):
     token_auth = ObtainJSONWebToken.Field()
-    verify_token = graphql_jwt.Verify.Field()
-    refresh_token = graphql_jwt.Refresh.Field()
-    revoke_token = graphql_jwt.Revoke.Field()
+    verify_token = Verify.Field()
+    refresh_token = Refresh.Field()
+    revoke_token = Revoke.Field()
     create_request = CreateRequest.Field()
     create_image = CreateImage.Field()
     approve_request = ApproveRequest.Field()

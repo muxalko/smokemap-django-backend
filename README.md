@@ -15,6 +15,28 @@ Run the command from the workspace root. It is development-only, performs no
 external geocoding, and can be run repeatedly without creating duplicate places.
 Refresh `http://localhost:3000` after seeding to see the markers.
 
+## Authentication lifecycle
+
+The GraphQL `tokenAuth`, `verifyToken`, `refreshToken` and `revokeToken`
+mutations are the canonical authentication lifecycle. Access tokens are Bearer
+JWTs with a five-minute lifetime and only `sub`, `type`, `iat` and `exp`
+claims. The same access token authenticates protected GraphQL and REST calls.
+
+Refresh tokens are opaque, live for at most seven days and are stored only as
+SHA-256 digests. Every successful refresh atomically rotates the credential
+without extending its family lifetime. Reusing a rotated credential marks the
+family compromised and revokes every successor. `revokeToken` revokes the
+whole family. Deploying this lifecycle deletes legacy third-party refresh
+records, deliberately requiring existing sessions to sign in again.
+
+Refresh and revoke accept `refreshToken` explicitly or from the
+`JWT-refresh-token` cookie for trusted server callers. Missing, invalid,
+expired and reused credentials return stable GraphQL codes:
+`INVALID_REFRESH_TOKEN`, `REFRESH_TOKEN_EXPIRED` and
+`REFRESH_TOKEN_REUSED`. Invalid access tokens return `INVALID_TOKEN`; generic
+login failure returns `AUTHENTICATION_FAILED` without revealing whether an
+account exists.
+
 ## Local moderation administrator
 
 Create or update a local-only administrator with an interactively entered password:
