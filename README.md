@@ -66,6 +66,21 @@ or printed. The command refuses to run outside debug mode. After provisioning,
 sign in at `http://localhost:3000/api/auth/signin` and open
 `http://localhost:3000/requests` to review pending submissions.
 
+For a repeatable login, submission, and moderation test cohort, run this
+non-interactive development-only command instead:
+
+```sh
+docker compose exec -T backend python manage.py provision_local_test_users
+```
+
+It creates or updates `admin@smokemap.local`, `user-one@smokemap.local`, and
+`user-two@smokemap.local`. All three use the local-only fallback password
+`Smokemap-local-test-only-2026!`; override it without putting a password on the
+command line by setting `SMOKEMAP_LOCAL_TEST_PASSWORD` in the backend container
+environment. The command never prints the password and refuses to run when
+`DEBUG` is disabled. Rerunning it restores the documented names, active state,
+roles, group membership, and password without creating duplicates.
+
 This example shows how to use Django 4 on Vercel with Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
 
 ## Demo

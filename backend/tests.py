@@ -165,6 +165,65 @@ class LocalAdminCommandTests(TestCase):
         mock_getpass.assert_not_called()
 
 
+class LocalTestUsersCommandTests(TestCase):
+    @override_settings(DEBUG=True)
+    @patch.dict("os.environ", {"SMOKEMAP_LOCAL_TEST_PASSWORD": "First-local-2026!"})
+    def test_provisions_repeatable_role_correct_test_cohort(self):
+        call_command("provision_local_test_users", stdout=StringIO())
+
+        User = get_user_model()
+        admin = User.objects.get(email="admin@smokemap.local")
+        regular_users = list(
+            User.objects.filter(
+                email__in=("user-one@smokemap.local", "user-two@smokemap.local")
+            ).order_by("email")
+        )
+        self.assertTrue(admin.is_active)
+        self.assertTrue(admin.is_staff)
+        self.assertTrue(admin.is_superuser)
+        self.assertTrue(admin.groups.filter(name="admins").exists())
+        self.assertTrue(admin.check_password("First-local-2026!"))
+        self.assertEqual(
+            [user.name for user in regular_users],
+            ["Local User One", "Local User Two"],
+        )
+        for user in regular_users:
+            self.assertTrue(user.is_active)
+            self.assertFalse(user.is_staff)
+            self.assertFalse(user.is_superuser)
+            self.assertFalse(user.groups.filter(name="admins").exists())
+            self.assertTrue(user.check_password("First-local-2026!"))
+
+        regular_users[0].is_staff = True
+        regular_users[0].is_superuser = True
+        regular_users[0].save(update_fields=["is_staff", "is_superuser"])
+        regular_users[0].groups.add(Group.objects.get(name="admins"))
+
+        with patch.dict(
+            "os.environ", {"SMOKEMAP_LOCAL_TEST_PASSWORD": "Second-local-2026!"}
+        ):
+            call_command("provision_local_test_users", stdout=StringIO())
+
+        self.assertEqual(
+            User.objects.filter(email__endswith="@smokemap.local").count(), 3
+        )
+        corrected = User.objects.get(email="user-one@smokemap.local")
+        self.assertFalse(corrected.is_staff)
+        self.assertFalse(corrected.is_superuser)
+        self.assertFalse(corrected.groups.filter(name="admins").exists())
+        self.assertTrue(corrected.check_password("Second-local-2026!"))
+
+    @override_settings(DEBUG=False)
+    def test_refuses_non_debug_mode(self):
+        with self.assertRaisesMessage(CommandError, "DEBUG is enabled"):
+            call_command("provision_local_test_users", stdout=StringIO())
+
+        User = get_user_model()
+        self.assertFalse(
+            User.objects.filter(email__endswith="@smokemap.local").exists()
+        )
+
+
 class UsersManagersTests(TestCase):
 
     def test_create_user(self):
