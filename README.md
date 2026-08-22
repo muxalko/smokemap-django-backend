@@ -16,6 +16,34 @@ Pull requests and pushes to `development` independently run the Django system
 check and complete backend suite against an isolated PostGIS service. CI also
 scans the full Git history with Gitleaks and redacts any detected values.
 
+## Viewport place API
+
+The public, read-only map contract is:
+
+```text
+GET /api/v1/places/?bbox=minx,miny,maxx,maxy&zoom=11&categories=1,2
+```
+
+`bbox` and `zoom` are required. Longitude is limited to `[-180, 180]`, latitude
+to `[-90, 90]`, minimums must be less than maximums, and neither span may
+exceed 10 degrees. `zoom` must be an integer from 0 through 22. `categories` is
+an optional comma-separated list of at most 20 positive category IDs.
+
+The endpoint queries approved `Place` rows through the indexed authoritative
+`Address.location` geometry, includes points on the viewport boundary, and
+returns at most 500 deterministically ordered GeoJSON features. A larger result
+set returns `viewport_result_limit_exceeded` so clients can zoom in or select
+categories instead of silently receiving partial data. Invalid input returns
+`invalid_viewport`; both errors use HTTP 400 and a stable non-sensitive detail.
+
+The response exposes only the map properties `place_id`, `name`, `category`,
+`description`, `address`, `tags`, and `website`. It never includes submission
+owners, reviewers, authentication state, or audit fields. The M2 performance
+budget is at most two database queries, 500 features, 512 KiB of encoded
+GeoJSON, and 250 ms server processing time for a representative city viewport.
+The query-count and GiST-plan expectations are enforced in backend tests;
+response size and elapsed time are recorded during M2 exit testing.
+
 ## Local mock map data
 
 With the workspace Docker Compose stack running, seed three deterministic fictional

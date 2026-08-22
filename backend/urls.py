@@ -15,6 +15,7 @@ router.register(r'locations', views.LocationViewSet, basename='location')
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
+    path('api/v1/places/', views.ViewportPlaceView.as_view(), name='viewport-places'),
     path('', include(router.urls)),
     path('health/live/', health.live, name='health-live'),
     path('health/ready/', health.ready, name='health-ready'),
