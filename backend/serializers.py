@@ -62,3 +62,30 @@ class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
         model = Place
         geo_field = "location"
         fields = ['place_id', 'name','category','description','address', 'tags', 'website']
+
+
+class ViewportPlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
+    location = GeometrySerializerMethodField()
+    place_id = rest_serializers.IntegerField(source="id")
+    category = rest_serializers.SerializerMethodField()
+    address = rest_serializers.CharField(source="address.addressString")
+    tags = TagListingField(many=True, read_only=True)
+
+    def get_location(self, obj):
+        return obj.address.location
+
+    def get_category(self, obj):
+        return {"id": obj.category_id, "name": obj.category.name}
+
+    class Meta:
+        model = Place
+        geo_field = "location"
+        fields = (
+            "place_id",
+            "name",
+            "category",
+            "description",
+            "address",
+            "tags",
+            "website",
+        )

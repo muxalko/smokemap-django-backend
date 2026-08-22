@@ -9,10 +9,11 @@ from unittest.mock import patch
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.contrib.gis.geos import Point, Polygon
 from django.core.management.base import CommandError
 from django.core.management import call_command
 from django.core.management.utils import get_random_string
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -27,6 +28,7 @@ from .models import (
     Place,
     RefreshTokenCredential,
     Request,
+    Tag,
 )
 from .permissions import role_for_user
 from .schema import schema
@@ -107,6 +109,134 @@ class MockDataCommandTests(TestCase):
                 "Mock Georgetown Rooftop",
             },
         )
+
+
+class ViewportPlaceApiTests(TestCase):
+    endpoint = "/api/v1/places/"
+
+    def setUp(self):
+        self.outdoors = Category.objects.get(name="Outdoors")
+        self.indoors = Category.objects.get(name="Indoors")
+
+    def create_place(self, name, longitude, latitude, category=None, tags=()):
+        address = Address(
+            addressString=f"{name} address",
+            location=Point(longitude, latitude, srid=4326),
+        )
+        address.save(omit_geocode=True)
+        place = Place.objects.create(
+            name=name,
+            category=category or self.outdoors,
+            description=f"{name} description",
+            address=address,
+            website=f"https://{name.lower().replace(' ', '-')}.example.test",
+        )
+        place.tags.set(Tag.objects.get_or_create(name=tag)[0] for tag in tags)
+        return place
+
+    def get_viewport(self, **params):
+        defaults = {"bbox": "-78,38,-76,40", "zoom": "11"}
+        defaults.update(params)
+        return self.client.get(self.endpoint, defaults)
+
+    def test_returns_only_current_viewport_places_with_stable_public_properties(self):
+        inside = self.create_place("Inside", -77, 39, tags=("quiet",))
+        edge = self.create_place("Edge", -76, 40, category=self.indoors)
+        self.create_place("Outside", -80, 39)
+
+        with self.assertNumQueries(2):
+            response = self.get_viewport()
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["type"], "FeatureCollection")
+        self.assertEqual(
+            [feature["properties"]["place_id"] for feature in payload["features"]],
+            [inside.pk, edge.pk],
+        )
+        feature = payload["features"][0]
+        self.assertEqual(feature["geometry"], {"type": "Point", "coordinates": [-77.0, 39.0]})
+        self.assertEqual(
+            set(feature["properties"]),
+            {"place_id", "name", "category", "description", "address", "tags", "website"},
+        )
+        self.assertEqual(
+            feature["properties"]["category"],
+            {"id": self.outdoors.pk, "name": "Outdoors"},
+        )
+        self.assertEqual(feature["properties"]["tags"], ["quiet"])
+
+    def test_empty_and_category_filtered_viewports_are_successful(self):
+        outdoors = self.create_place("Outdoors place", -77, 39)
+        indoors = self.create_place(
+            "Indoors place", -77.1, 39.1, category=self.indoors
+        )
+
+        filtered = self.get_viewport(categories=str(self.indoors.pk)).json()
+        self.assertEqual(
+            [feature["properties"]["place_id"] for feature in filtered["features"]],
+            [indoors.pk],
+        )
+        empty = self.get_viewport(bbox="1,1,2,2").json()
+        self.assertEqual(empty, {"type": "FeatureCollection", "features": []})
+        self.assertNotEqual(outdoors.pk, indoors.pk)
+
+    def test_invalid_and_oversized_viewports_fail_predictably(self):
+        cases = (
+            ({"bbox": None}, "bbox is required"),
+            ({"bbox": "1,2,3"}, "four finite numbers"),
+            ({"bbox": "a,2,3,4"}, "four numbers"),
+            ({"bbox": "-181,0,1,1"}, "longitude"),
+            ({"bbox": "0,-91,1,1"}, "latitude"),
+            ({"bbox": "1,0,0,1"}, "minimums"),
+            ({"bbox": "0,0,11,1"}, "span"),
+            ({"bbox": "0,0,nan,1"}, "finite"),
+            ({"zoom": None}, "zoom"),
+            ({"zoom": "23"}, "zoom"),
+            ({"categories": "0"}, "positive integer"),
+            ({"categories": "one"}, "positive integer"),
+            ({"categories": ",".join(str(value) for value in range(1, 22))}, "at most"),
+        )
+        for overrides, detail in cases:
+            params = {"bbox": "-78,38,-76,40", "zoom": "11"}
+            params.update(overrides)
+            params = {key: value for key, value in params.items() if value is not None}
+            with self.subTest(params=params):
+                response = self.client.get(self.endpoint, params)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["code"], "invalid_viewport")
+                self.assertIn(detail, response.json()["detail"])
+
+    @patch("backend.views.VIEWPORT_RESULT_LIMIT", 1)
+    def test_result_cap_requires_a_narrower_viewport(self):
+        self.create_place("First", -77, 39)
+        self.create_place("Second", -77.1, 39.1)
+
+        response = self.get_viewport()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "viewport_result_limit_exceeded")
+
+    @patch("backend.views.VIEWPORT_RESPONSE_LIMIT_BYTES", 1)
+    def test_response_size_cap_requires_a_narrower_viewport(self):
+        self.create_place("One place", -77, 39)
+
+        response = self.get_viewport()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "viewport_result_limit_exceeded")
+
+    def test_spatial_lookup_uses_the_address_gist_index(self):
+        self.assertTrue(Address._meta.get_field("location").spatial_index)
+        viewport = Polygon.from_bbox((-78, 38, -76, 40))
+        queryset = Place.objects.filter(address__location__coveredby=viewport)
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL enable_seqscan = off")
+        plan = queryset.explain()
+        self.assertIn("backend_address_location_698a0c50_id", plan)
+
+    def test_endpoint_is_read_only(self):
+        self.assertEqual(self.client.post(self.endpoint, {}).status_code, 405)
 
 
 class LocalAdminCommandTests(TestCase):
