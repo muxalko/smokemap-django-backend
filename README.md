@@ -16,6 +16,26 @@ Pull requests and pushes to `development` independently run the Django system
 check and complete backend suite against an isolated PostGIS service. CI also
 scans the full Git history with Gitleaks and redacts any detected values.
 
+## Category reference data
+
+Categories are administrator-managed physical-setting reference data. Clients
+may read them through the existing GraphQL `categories` query, but no client API
+creates categories. Each category has a backend-issued, exact, case-sensitive
+`slug` that is separate from its display `name`; issued slugs are unique and
+immutable, while administrators may update display names and descriptions.
+
+The initial slug-to-name mappings are `indoors` → “Indoors”, `outdoors` →
+“Outdoors”, `rooftop` → “Rooftop”, `underground` → “Underground”,
+`on-the-water` → “On the water”, `underwater` → “Underwater”, `in-the-air` →
+“In the air”, and `other` → “Other”. Additions or other taxonomy evolution must
+use a new schema/data migration and must never edit the applied
+`backend/migrations/0001_initial.py` or repurpose a published slug.
+
+`Place` and `Request` continue to hold exactly one protected category foreign
+key. Their existing numeric category inputs, and the viewport category-ID
+filter, remain compatibility interfaces until the submission-input work changes
+them to exact slug lookup.
+
 ## Viewport place API
 
 The public, read-only map contract is:

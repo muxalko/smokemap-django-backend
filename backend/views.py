@@ -191,7 +191,9 @@ class PlaceViewSet(viewsets.ModelViewSet):
     def filter_queryset(self, queryset):
         addresses_queryset = super().filter_queryset(queryset)
         addresses=addresses_queryset.values_list('id')
-        places_queryset = Place.objects.filter(address_id__in=addresses)
+        places_queryset = Place.objects.filter(
+            address_id__in=addresses
+        ).select_related("category")
         return places_queryset
     
     serializer_class = PlaceSerializer

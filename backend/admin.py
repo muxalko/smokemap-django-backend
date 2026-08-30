@@ -30,7 +30,16 @@ class CustomUserAdmin(UserAdmin):
 
 # Register your models here.
 admin.site.register(CustomUser, CustomUserAdmin)
-admin.site.register(Category)
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ("slug", "name", "description")
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("slug",) if obj else ()
+
+
 admin.site.register(Tag)
 admin.site.register(Address)
 admin.site.register(Request)
@@ -38,4 +47,3 @@ admin.site.register(Image)
 @admin.register(Place)
 class PlaceAdmin(OSMGeoAdmin):
     list_display = ('name', 'address')
-

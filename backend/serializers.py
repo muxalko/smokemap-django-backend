@@ -55,13 +55,23 @@ class PlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
 
     # add place ID to properties
     place_id = rest_serializers.SerializerMethodField('get_place_id')
+    category_slug = rest_serializers.CharField(source="category.slug", read_only=True)
     def get_place_id(self, value):
          return value.id
     
     class Meta:
         model = Place
         geo_field = "location"
-        fields = ['place_id', 'name','category','description','address', 'tags', 'website']
+        fields = [
+            'place_id',
+            'name',
+            'category',
+            'category_slug',
+            'description',
+            'address',
+            'tags',
+            'website',
+        ]
 
 
 class ViewportPlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
@@ -75,7 +85,11 @@ class ViewportPlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
         return obj.address.location
 
     def get_category(self, obj):
-        return {"id": obj.category_id, "name": obj.category.name}
+        return {
+            "id": obj.category_id,
+            "slug": obj.category.slug,
+            "name": obj.category.name,
+        }
 
     class Meta:
         model = Place

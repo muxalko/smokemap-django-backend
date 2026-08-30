@@ -48,11 +48,29 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 
 class Category(models.Model):
+    slug = models.SlugField(unique=True, max_length=50)
     name = models.CharField(unique=True, max_length=25)
     description = models.CharField(null=True, max_length=255)
 
     class Meta:
         verbose_name_plural = 'Categories'
+
+    def clean(self):
+        super().clean()
+        self._validate_immutable_slug()
+
+    def save(self, *args, **kwargs):
+        self._validate_immutable_slug()
+        return super().save(*args, **kwargs)
+
+    def _validate_immutable_slug(self):
+        if not self.pk:
+            return
+        issued_slug = (
+            type(self).objects.filter(pk=self.pk).values_list("slug", flat=True).first()
+        )
+        if issued_slug is not None and self.slug != issued_slug:
+            raise ValidationError({"slug": "An issued category slug is immutable."})
 
     def __str__(self):
         return self.name
