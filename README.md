@@ -41,8 +41,51 @@ The response exposes only the map properties `place_id`, `name`, `category`,
 owners, reviewers, authentication state, or audit fields. The M2 performance
 budget is at most two database queries, 500 features, 512 KiB of encoded
 GeoJSON, and 250 ms server processing time for a representative city viewport.
-The query-count and GiST-plan expectations are enforced in backend tests;
-response size and elapsed time are recorded during M2 exit testing.
+The query-count contract is enforced in backend tests. The deterministic M2
+exit harness below enforces the natural GiST plan, response size, and elapsed
+time against a representative populated dataset.
+
+### Deterministic viewport benchmark
+
+Run the M2 exit harness from this backend checkout. The command uses the
+Smokemap superproject in the sibling `../smokemap` directory for Compose, while
+mounting the current backend worktree (rather than the superproject's pinned
+backend submodule) into the one-off container:
+
+```sh
+docker compose --project-directory ../smokemap \
+  --file ../smokemap/docker-compose.yaml \
+  run --rm -T --build --volume "$PWD:/app" backend \
+  python manage.py benchmark_viewport_places \
+    --output-dir /app/viewport-benchmark-evidence
+```
+
+The harness exercises the real `GET /api/v1/places/` route in-process, including
+middleware, rendering, and its two ORM queries. It creates a namespaced,
+row-major 200 by 100 Washington, DC grid (20,000 synthetic places) in a
+transaction. The fixed `-77.020,38.830,-76.980,38.870` viewport contains exactly
+400 points. A reserved benchmark category is supplied through the public
+`categories` query parameter, so unrelated pre-existing places in or around the
+bounds remain untouched and cannot alter the measured response. Every warmup
+and sample verifies that all 400 returned features belong to the benchmark
+namespace. After three warmups, each of five samples must independently stay
+within two queries, 500 features, 512 KiB of encoded GeoJSON, and 250 ms of
+server processing.
+
+Before planning, the harness analyzes the populated tables. It then runs the
+endpoint's actual limited queryset through natural PostgreSQL `EXPLAIN (ANALYZE,
+BUFFERS, FORMAT JSON)`, requires `enable_seqscan` to remain `on`, and verifies
+that the plan names a real GiST index on `Address.location`. It never changes a
+planner setting. The command prints canonical text evidence and, when
+`--output-dir` is supplied, writes `viewport-places-benchmark.txt` and
+`viewport-places-benchmark.json` with the dataset, full plan, per-sample query,
+feature and byte counts, and timings.
+
+Synthetic names, addresses, tags, and category use the reserved
+`__sm79_vpbench_v1__` prefix. A pre-run cleanup refuses cross-namespace
+references, and the command refuses to run unless Django `DEBUG` is enabled.
+The benchmark inserts are rolled back even on failure, and table statistics are
+refreshed after rollback so neither rows nor synthetic planner estimates remain.
 
 ## Local mock map data
 
