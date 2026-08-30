@@ -122,6 +122,7 @@ def cleanup_benchmark_namespace():
 
 def seed_benchmark_dataset():
     category = Category.objects.create(
+        slug=f"{NAMESPACE}category",
         name=BENCHMARK_CATEGORY_NAME,
         description="Reserved category for the issue #79 viewport benchmark.",
     )

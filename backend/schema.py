@@ -65,7 +65,7 @@ class PlaceType(DjangoObjectType):
 class CategoryType(DjangoObjectType):
     class Meta:
         model = Category
-        fields = ('id', 'name', 'description')
+        fields = ('id', 'slug', 'name', 'description')
     
     # @classmethod
     # def get_queryset(cls, queryset, info):

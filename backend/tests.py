@@ -61,17 +61,17 @@ class LocalLoggingTests(SimpleTestCase):
 
 class CategoryProvisioningTests(TestCase):
     def test_provisional_categories_are_available(self):
-        self.assertSetEqual(
-            set(Category.objects.values_list("name", flat=True)),
+        self.assertEqual(
+            dict(Category.objects.values_list("slug", "name")),
             {
-                "Indoors",
-                "Outdoors",
-                "Rooftop",
-                "Underground",
-                "On the water",
-                "Underwater",
-                "In the air",
-                "Other",
+                "indoors": "Indoors",
+                "outdoors": "Outdoors",
+                "rooftop": "Rooftop",
+                "underground": "Underground",
+                "on-the-water": "On the water",
+                "underwater": "Underwater",
+                "in-the-air": "In the air",
+                "other": "Other",
             },
         )
 
@@ -162,7 +162,7 @@ class ViewportPlaceApiTests(TestCase):
         )
         self.assertEqual(
             feature["properties"]["category"],
-            {"id": self.outdoors.pk, "name": "Outdoors"},
+            {"id": self.outdoors.pk, "slug": "outdoors", "name": "Outdoors"},
         )
         self.assertEqual(feature["properties"]["tags"], ["quiet"])
 
@@ -894,12 +894,15 @@ class ConcurrentRefreshTests(TransactionTestCase):
     def _post_teardown(self):
         super()._post_teardown()
         provisional_categories = import_module(
-            "backend.migrations.0001_initial"
-        ).PROVISIONAL_CATEGORIES
-        for name, description in provisional_categories:
+            "backend.migrations.0004_category_slug"
+        ).INITIAL_CATEGORIES
+        descriptions = dict(
+            import_module("backend.migrations.0001_initial").PROVISIONAL_CATEGORIES
+        )
+        for slug, name in provisional_categories:
             Category.objects.update_or_create(
                 name=name,
-                defaults={"description": description},
+                defaults={"slug": slug, "description": descriptions[name]},
             )
 
     def test_concurrent_rotation_allows_one_success_and_revokes_on_reuse(self):

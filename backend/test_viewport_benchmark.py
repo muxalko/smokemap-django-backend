@@ -261,7 +261,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
         )
 
     def test_cleanup_removes_only_complete_benchmark_namespace(self):
-        benchmark_category = Category.objects.create(name=BENCHMARK_CATEGORY_NAME)
+        benchmark_category = Category.objects.create(
+            slug=f"{NAMESPACE}category",
+            name=BENCHMARK_CATEGORY_NAME,
+        )
         benchmark_tag = Tag.objects.create(name=f"{NAMESPACE}tag_0")
         benchmark_place = self.create_place(
             f"{NAMESPACE}place_00000",
@@ -271,7 +274,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
         )
         benchmark_place.tags.add(benchmark_tag)
 
-        unrelated_category = Category.objects.create(name="Unrelated category")
+        unrelated_category = Category.objects.create(
+            slug="unrelated-category",
+            name="Unrelated category",
+        )
         unrelated_place = self.create_place(
             "Unrelated viewport place",
             unrelated_category,
@@ -290,7 +296,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
         self.assertTrue(Category.objects.filter(pk=unrelated_category.pk).exists())
 
     def test_cleanup_refuses_cross_namespace_category_without_deleting(self):
-        benchmark_category = Category.objects.create(name=BENCHMARK_CATEGORY_NAME)
+        benchmark_category = Category.objects.create(
+            slug=f"{NAMESPACE}category",
+            name=BENCHMARK_CATEGORY_NAME,
+        )
         unrelated_place = self.create_place(
             "Unrelated place using reserved category",
             benchmark_category,
@@ -310,7 +319,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
 
 class ViewportBenchmarkDatabaseIsolationTests(TransactionTestCase):
     def test_real_endpoint_returns_400_benchmark_features_with_unrelated_bbox_row(self):
-        unrelated_category = Category.objects.create(name="Unrelated category")
+        unrelated_category = Category.objects.create(
+            slug="unrelated-category",
+            name="Unrelated category",
+        )
         unrelated_address = Address(
             addressString="Unrelated address inside benchmark viewport",
             location=Point(-77.0, 38.85, srid=4326),
