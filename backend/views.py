@@ -84,6 +84,18 @@ def parse_viewport_query(query_params):
     return bbox, zoom, category_ids
 
 
+def viewport_places_queryset(viewport, category_ids=()):
+    queryset = (
+        Place.objects.filter(address__location__coveredby=viewport)
+        .select_related("address", "category")
+        .prefetch_related("tags")
+        .order_by("id")
+    )
+    if category_ids:
+        queryset = queryset.filter(category_id__in=category_ids)
+    return queryset
+
+
 class ViewportPlaceView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -96,14 +108,7 @@ class ViewportPlaceView(APIView):
             )
 
         viewport = Polygon.from_bbox(bbox)
-        queryset = (
-            Place.objects.filter(address__location__coveredby=viewport)
-            .select_related("address", "category")
-            .prefetch_related("tags")
-            .order_by("id")
-        )
-        if category_ids:
-            queryset = queryset.filter(category_id__in=category_ids)
+        queryset = viewport_places_queryset(viewport, category_ids)
 
         places = list(queryset[: VIEWPORT_RESULT_LIMIT + 1])
         if len(places) > VIEWPORT_RESULT_LIMIT:
