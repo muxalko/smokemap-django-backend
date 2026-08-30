@@ -1,8 +1,5 @@
-from django.db import models
-from geopy.geocoders import Nominatim
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
-from django.contrib.gis import geos
 from django.utils import timezone
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
@@ -101,46 +98,15 @@ class Tag(models.Model):
     def __str__(self):
         return self.name
 
-# cache geocoding address resolve
 class Address(models.Model):
-    addressString = models.CharField(unique=True, max_length=255)
-    location = models.PointField()
-    
-    def save(self, *args, omit_geocode = False, **kwargs):
-        validated = True
-        validation_message = ''
-        try: 
-            check = Address.objects.get(addressString=self.addressString)
-            validated = False
-            validation_message = "Address already exists!"
-        except Exception as e:
-            print("Trying to find address in database: ", e)
-            
-        if (not validated):
-            raise ValidationError(
-                (validation_message),
-                params={'value': check},
-            )
-        
-        if not omit_geocode:
-            print("Trying to resolve {} by geocode".format(self.addressString))
-            geolocator = Nominatim(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0")
-            location = geolocator.geocode(self.addressString)
-            if location is not None and hasattr(location, 'latitude') and hasattr(location, 'longitude'):
-                self.location = geos.Point((location.longitude, location.latitude)) 
-                print("Address is resolved to ", self.location, location)
-            else:
-                raise ValidationError(
-                    ('The address cannot be resolved'),
-                    params={'value': self.addressString},
-                )
-        print("Saving address with the following params:", self)
-        
-        return super(Address, self).save(*args, **kwargs)
+    # This is an optional, human-supplied label. The submitted point is authoritative.
+    addressString = models.CharField(blank=True, null=True, max_length=255)
+    location = models.PointField(srid=4326)
 
     def __str__(self):
-        return "{} ({},{})".format(self.addressString, self.location[0], self.location[1])
+        return "{} ({},{})".format(
+            self.addressString or "", self.location[0], self.location[1]
+        )
 
 
 def get_tags_default():
@@ -149,9 +115,17 @@ def get_tags_default():
 
 
 class Request(models.Model):
+    class State(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PENDING = "pending", "Pending"
+        WITHDRAWN = "withdrawn", "Withdrawn"
+        EXPIRED = "expired", "Expired"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
     name = models.CharField(max_length=100)
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
-    description = models.CharField(max_length=255)
+    description = models.CharField(blank=True, null=True, max_length=255)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
     tags = models.ManyToManyField(
         Tag,
@@ -167,10 +141,13 @@ class Request(models.Model):
     approved_by = models.CharField(
         auto_created=True, blank=True, null=True, max_length=100)
     requested_by = models.CharField(max_length=255, null=True)
+    state = models.CharField(
+        choices=State.choices,
+        default=State.DRAFT,
+        max_length=16,
+    )
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        blank=True,
-        null=True,
         on_delete=models.PROTECT,
         related_name="submissions",
     )
@@ -189,6 +166,28 @@ class Request(models.Model):
 
     class Meta:
         ordering = ['-date_created']
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(
+                    state__in=[
+                        "draft",
+                        "pending",
+                        "withdrawn",
+                        "expired",
+                        "approved",
+                        "rejected",
+                    ]
+                ),
+                name="request_valid_lifecycle_state",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(state="approved", approved=True)
+                    | (~models.Q(state="approved") & models.Q(approved=False))
+                ),
+                name="request_state_legacy_approved_consistent",
+            ),
+        ]
 
     def __str__(self):
         return "{}: {} - {}, {}".format(self.date_created, self.name, self.description, self.address.addressString)
@@ -226,6 +225,116 @@ class RequestTag(models.Model):
             models.CheckConstraint(
                 check=models.Q(display__regex=r"^.{3,50}$"),
                 name="request_tag_display_length",
+            ),
+        ]
+
+
+class SubmissionOperation(models.TextChoices):
+    CREATE = "submission.create.v3", "Create submission"
+    FINALIZE = "submission.finalize.v3", "Finalize submission"
+    EXPIRE = "submission.expire.v3", "Expire submission"
+    WITHDRAW = "submission.withdraw.v4", "Withdraw submission"
+    APPROVE = "submission.approve.v4", "Approve submission"
+    REJECT = "submission.reject.v4", "Reject submission"
+
+
+class SubmissionIdempotency(models.Model):
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="submission_idempotency_records",
+    )
+    operation = models.CharField(max_length=32, choices=SubmissionOperation.choices)
+    key = models.CharField(max_length=255)
+    request_hash = models.CharField(max_length=64, editable=False)
+    submission = models.ForeignKey(
+        Request,
+        on_delete=models.CASCADE,
+        related_name="idempotency_records",
+    )
+    original_result = models.JSONField(editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("actor", "operation", "key"),
+                name="unique_submission_idempotency_scope",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(key=""),
+                name="submission_idempotency_key_not_empty",
+            ),
+        ]
+
+
+class SubmissionLifecycleEvent(models.Model):
+    class Outcome(models.TextChoices):
+        SUCCEEDED = "succeeded", "Succeeded"
+
+    submission = models.ForeignKey(
+        Request,
+        on_delete=models.CASCADE,
+        related_name="lifecycle_events",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="submission_lifecycle_events",
+    )
+    operation = models.CharField(max_length=32, choices=SubmissionOperation.choices)
+    from_state = models.CharField(
+        blank=True,
+        null=True,
+        max_length=16,
+        choices=Request.State.choices,
+    )
+    to_state = models.CharField(max_length=16, choices=Request.State.choices)
+    outcome = models.CharField(max_length=16, choices=Outcome.choices)
+    idempotency = models.OneToOneField(
+        SubmissionIdempotency,
+        on_delete=models.CASCADE,
+        related_name="lifecycle_event",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        operation=SubmissionOperation.CREATE,
+                        from_state__isnull=True,
+                        to_state=Request.State.DRAFT,
+                    )
+                    | models.Q(
+                        operation=SubmissionOperation.FINALIZE,
+                        from_state=Request.State.DRAFT,
+                        to_state=Request.State.PENDING,
+                    )
+                    | models.Q(
+                        operation=SubmissionOperation.EXPIRE,
+                        from_state=Request.State.DRAFT,
+                        to_state=Request.State.EXPIRED,
+                    )
+                    | models.Q(
+                        operation=SubmissionOperation.WITHDRAW,
+                        from_state__in=[Request.State.DRAFT, Request.State.PENDING],
+                        to_state=Request.State.WITHDRAWN,
+                    )
+                    | models.Q(
+                        operation=SubmissionOperation.APPROVE,
+                        from_state=Request.State.PENDING,
+                        to_state=Request.State.APPROVED,
+                    )
+                    | models.Q(
+                        operation=SubmissionOperation.REJECT,
+                        from_state=Request.State.PENDING,
+                        to_state=Request.State.REJECTED,
+                    )
+                ),
+                name="submission_event_valid_transition",
             ),
         ]
 
@@ -293,7 +402,7 @@ class RefreshTokenCredential(models.Model):
         return "refresh-credential:{}:{}".format(self.pk, self.family_id)
 
 class Place(models.Model):
-    name = models.CharField(unique=True, max_length=255)
+    name = models.CharField(max_length=255)
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.TextField(max_length=255, null=True)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)

@@ -118,7 +118,7 @@ class Command(BaseCommand):
         address = Address.objects.filter(addressString=address_string).first()
         if address is None:
             address = Address(addressString=address_string, location=point)
-            address.save(omit_geocode=True)
+            address.save()
             return address
 
         Address.objects.filter(pk=address.pk).update(location=point)

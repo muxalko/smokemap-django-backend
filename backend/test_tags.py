@@ -25,9 +25,9 @@ from .tagging import normalize_submission_tags, normalize_tag_text
 
 
 CREATE_REQUEST = """
-    mutation Create($input: RequestInput!) {
-      createRequest(input: $input) {
-        request { id tags }
+    mutation Create($input: SubmissionV3Input!, $key: String!) {
+      createSubmissionV3(input: $input, idempotencyKey: $key) {
+        submission { id tags }
       }
     }
 """
@@ -109,19 +109,23 @@ class TagSubmissionTests(TestCase):
         return SimpleNamespace(user=user or self.user, META={})
 
     def create_submission(self, name, tags, user=None):
+        owner = user or self.user
         return self.graphql.execute(
             CREATE_REQUEST,
             variable_values={
+                "key": f"tag-test:{owner.pk}:{name}",
                 "input": {
                     "name": name,
-                    "category": str(self.category.pk),
+                    "categorySlug": self.category.slug,
                     "description": "Tag proposal test",
-                    "addressString": f"[{len(name)},{len(name) + 1}]",
+                    "addressLabel": f"Address for {name}",
+                    "longitude": -77,
+                    "latitude": 39,
                     "tags": tags,
-                    "website": "https://example.test",
+                    "website": "https://smokemap.org",
                 }
             },
-            context_value=self.context(user),
+            context_value=self.context(owner),
         )
 
     def test_existing_public_tag_is_reused_and_new_proposal_stays_private(self):
@@ -133,9 +137,9 @@ class TagSubmissionTests(TestCase):
         )
 
         self.assertNotIn("errors", result)
-        request_id = result["data"]["createRequest"]["request"]["id"]
+        request_id = result["data"]["createSubmissionV3"]["submission"]["id"]
         self.assertEqual(
-            result["data"]["createRequest"]["request"]["tags"],
+            result["data"]["createSubmissionV3"]["submission"]["tags"],
             ["quiet patio", "New Proposal"],
         )
         links = list(
@@ -176,14 +180,14 @@ class TagSubmissionTests(TestCase):
 
         self.assertNotIn("errors", owner_a)
         self.assertNotIn("errors", owner_b)
-        request_a_id = owner_a["data"]["createRequest"]["request"]["id"]
-        request_b_id = owner_b["data"]["createRequest"]["request"]["id"]
+        request_a_id = owner_a["data"]["createSubmissionV3"]["submission"]["id"]
+        request_b_id = owner_b["data"]["createSubmissionV3"]["submission"]["id"]
         self.assertEqual(
-            owner_a["data"]["createRequest"]["request"]["tags"],
+            owner_a["data"]["createSubmissionV3"]["submission"]["tags"],
             ["Quiet Patio"],
         )
         self.assertEqual(
-            owner_b["data"]["createRequest"]["request"]["tags"],
+            owner_b["data"]["createSubmissionV3"]["submission"]["tags"],
             ["QUIET PATIO"],
         )
         self.assertEqual(Tag.objects.filter(canonical="quiet patio").count(), 1)
@@ -213,7 +217,7 @@ class TagSubmissionTests(TestCase):
         global_tags = self.graphql.execute("query { tags { id name } }")
         self.assertEqual(global_tags["data"]["tags"], [])
 
-    def test_approval_uses_approved_snapshot_without_rewriting_other_history(self):
+    def test_legacy_approval_cannot_publish_private_tag_vocabulary(self):
         owner_a = self.create_submission(
             "First private tag proposal",
             ["Quiet Patio"],
@@ -224,8 +228,7 @@ class TagSubmissionTests(TestCase):
             ["QUIET PATIO"],
             self.other_user,
         )
-        request_a_id = owner_a["data"]["createRequest"]["request"]["id"]
-        request_b_id = owner_b["data"]["createRequest"]["request"]["id"]
+        request_b_id = owner_b["data"]["createSubmissionV3"]["submission"]["id"]
 
         approved_b = self.graphql.execute(
             APPROVE_REQUEST,
@@ -233,72 +236,18 @@ class TagSubmissionTests(TestCase):
             context_value=self.context(self.moderator),
         )
 
-        self.assertNotIn("errors", approved_b)
         self.assertEqual(
-            approved_b["data"]["approveRequest"]["request"]["tags"],
-            ["QUIET PATIO"],
+            approved_b["errors"][0]["extensions"]["code"],
+            "FORBIDDEN",
         )
         shared_tag = Tag.objects.get(canonical="quiet patio")
-        self.assertTrue(shared_tag.is_public)
-        self.assertEqual(shared_tag.name, "QUIET PATIO")
-        self.assertEqual(
-            list(
-                Place.objects.get(name="Second private tag proposal with case")
-                .tags.values_list("name", flat=True)
-            ),
-            ["QUIET PATIO"],
+        self.assertFalse(shared_tag.is_public)
+        self.assertFalse(
+            Place.objects.filter(name="Second private tag proposal with case").exists()
         )
         global_tags = self.graphql.execute("query { tags { id name } }")
-        self.assertEqual(
-            global_tags["data"]["tags"],
-            [{"id": str(shared_tag.pk), "name": "QUIET PATIO"}],
-        )
-
-        owner_a_history = self.graphql.execute(
-            "query Detail($id: ID!) { requestById(id: $id) { tags } }",
-            variable_values={"id": request_a_id},
-            context_value=self.context(self.user),
-        )
-        self.assertEqual(
-            owner_a_history["data"]["requestById"]["tags"],
-            ["Quiet Patio"],
-        )
-
-        later = self.create_submission(
-            "Later public vocabulary reuse",
-            ["quiet PATIO"],
-            self.user,
-        )
-        later_id = later["data"]["createRequest"]["request"]["id"]
-        self.assertEqual(
-            later["data"]["createRequest"]["request"]["tags"],
-            ["quiet PATIO"],
-        )
-        approved_later = self.graphql.execute(
-            APPROVE_REQUEST,
-            variable_values={"id": later_id},
-            context_value=self.context(self.moderator),
-        )
-        self.assertNotIn("errors", approved_later)
-        self.assertEqual(
-            approved_later["data"]["approveRequest"]["request"]["tags"],
-            ["quiet PATIO"],
-        )
-        shared_tag.refresh_from_db()
-        self.assertEqual(shared_tag.name, "QUIET PATIO")
-        self.assertEqual(
-            list(
-                Place.objects.get(name="Later public vocabulary reuse")
-                .tags.values_list("name", flat=True)
-            ),
-            ["QUIET PATIO"],
-        )
-        self.assertEqual(
-            Location.objects.get(
-                place_id=str(Place.objects.get(name="Later public vocabulary reuse").pk)
-            ).tags,
-            "QUIET PATIO",
-        )
+        self.assertEqual(global_tags["data"]["tags"], [])
+        self.assertEqual(Request.objects.get(pk=request_b_id).state, Request.State.DRAFT)
 
     def test_invalid_tags_leave_no_submission_address_or_tag_rows(self):
         baseline = (Request.objects.count(), Address.objects.count(), Tag.objects.count())
@@ -334,7 +283,7 @@ class TagSubmissionTests(TestCase):
             "Ordered tag submission",
             ["Third display", "First display", "Second display"],
         )
-        request_id = created["data"]["createRequest"]["request"]["id"]
+        request_id = created["data"]["createSubmissionV3"]["submission"]["id"]
 
         with self.assertNumQueries(2):
             listed = self.graphql.execute(
@@ -352,57 +301,42 @@ class TagSubmissionTests(TestCase):
         self.assertEqual(listed["data"]["requests"][0]["tags"], expected)
         self.assertEqual(detailed["data"]["requestById"]["tags"], expected)
 
-    def test_approval_promotes_tags_and_materializes_the_same_rows(self):
+    def test_legacy_approval_does_not_materialize_place_or_promote_tags(self):
         created = self.create_submission(
             "Approved tag submission",
             ["First proposal", "Second proposal"],
         )
-        request_id = created["data"]["createRequest"]["request"]["id"]
-        tag_ids = list(
-            RequestTag.objects.filter(request_id=request_id)
-            .order_by("position")
-            .values_list("tag_id", flat=True)
-        )
-
+        request_id = created["data"]["createSubmissionV3"]["submission"]["id"]
         approved = self.graphql.execute(
             APPROVE_REQUEST,
             variable_values={"id": request_id},
             context_value=self.context(self.moderator),
         )
 
-        self.assertNotIn("errors", approved)
+        self.assertEqual(approved["errors"][0]["extensions"]["code"], "FORBIDDEN")
         submission = Request.objects.get(pk=request_id)
-        place = Place.objects.get(name=submission.name)
-        self.assertTrue(submission.approved)
-        self.assertEqual(
-            set(place.tags.values_list("pk", flat=True)),
-            set(tag_ids),
-        )
-        self.assertFalse(Tag.objects.filter(pk__in=tag_ids, is_public=False).exists())
-        self.assertEqual(
-            Location.objects.get(place_id=str(place.pk)).tags,
-            "First proposal,Second proposal",
+        self.assertEqual(submission.state, Request.State.DRAFT)
+        self.assertFalse(submission.approved)
+        self.assertFalse(Place.objects.filter(name=submission.name).exists())
+        self.assertTrue(
+            Tag.objects.filter(request_tags__request_id=request_id, is_public=False).exists()
         )
 
-    def test_approval_failure_rolls_back_place_promotion_and_audit(self):
+    def test_legacy_approval_is_denied_before_any_audit_or_place_write(self):
         created = self.create_submission(
             "Rollback tag submission",
             ["Private proposal"],
         )
-        request_id = created["data"]["createRequest"]["request"]["id"]
+        request_id = created["data"]["createSubmissionV3"]["submission"]["id"]
         tag = Tag.objects.get(request_tags__request_id=request_id)
 
-        with patch(
-            "backend.schema.ModerationAudit.objects.create",
-            side_effect=RuntimeError("injected approval failure"),
-        ):
-            result = self.graphql.execute(
-                APPROVE_REQUEST,
-                variable_values={"id": request_id},
-                context_value=self.context(self.moderator),
-            )
+        result = self.graphql.execute(
+            APPROVE_REQUEST,
+            variable_values={"id": request_id},
+            context_value=self.context(self.moderator),
+        )
 
-        self.assertIn("errors", result)
+        self.assertEqual(result["errors"][0]["extensions"]["code"], "FORBIDDEN")
         self.assertFalse(Request.objects.get(pk=request_id).approved)
         tag.refresh_from_db()
         self.assertFalse(tag.is_public)
@@ -415,17 +349,22 @@ class TagSubmissionTests(TestCase):
 
 class TagDatabaseConstraintTests(TestCase):
     def setUp(self):
+        self.owner = get_user_model().objects.create_user(
+            email="tag-constraint-owner@smokemap.test",
+            password="test",
+        )
         self.category = Category.objects.get(slug="outdoors")
         self.address = Address(
             addressString="Tag constraint address",
             location=Point(-77, 39, srid=4326),
         )
-        self.address.save(omit_geocode=True)
+        self.address.save()
         self.request = Request.objects.create(
             name="Tag constraint request",
             category=self.category,
             description="Constraint test",
             address=self.address,
+            owner=self.owner,
         )
         self.first = Tag.objects.create(name="First tag")
         self.second = Tag.objects.create(name="Second tag")
@@ -489,6 +428,11 @@ class CanonicalTagMigrationTests(TransactionTestCase):
         place_model = old_apps.get_model("backend", "Place")
         request_model = old_apps.get_model("backend", "Request")
         tag_model = old_apps.get_model("backend", "Tag")
+        user_model = old_apps.get_model("backend", "CustomUser")
+        owner = user_model.objects.create(
+            email="legacy-tag-owner@smokemap.test",
+            password="!",
+        )
 
         category = ensure_historical_outdoors_category(old_apps)
         address = address_model.objects.create(
@@ -509,6 +453,7 @@ class CanonicalTagMigrationTests(TransactionTestCase):
             description="Existing proposal",
             address_id=address.pk,
             tags=["ＰＡＴＩＯ SMOKE", "  New\tTag "],
+            owner_id=owner.pk,
         )
         other_request = request_model.objects.create(
             name="Legacy request with shared private canonical",
@@ -516,6 +461,7 @@ class CanonicalTagMigrationTests(TransactionTestCase):
             description="Same canonical with its own display spelling",
             address_id=address.pk,
             tags=["NEW TAG"],
+            owner_id=owner.pk,
         )
         self.existing_tag_id = existing_tag.pk
         self.place_id = place.pk
@@ -628,6 +574,10 @@ class InvalidLegacyRequestTagMigrationTests(TransactionTestCase):
         self.addCleanup(self._repair_and_migrate_to_latest)
         self.old_apps = executor.loader.project_state(self.migrate_from).apps
         category = ensure_historical_outdoors_category(self.old_apps)
+        owner = self.old_apps.get_model("backend", "CustomUser").objects.create(
+            email="invalid-legacy-tag-owner@smokemap.test",
+            password="!",
+        )
         address = self.old_apps.get_model("backend", "Address").objects.create(
             addressString="Invalid legacy request tag address",
             location=Point(-77, 39, srid=4326),
@@ -638,6 +588,7 @@ class InvalidLegacyRequestTagMigrationTests(TransactionTestCase):
             description="Migration must reject null elements.",
             address_id=address.pk,
             tags=[None],
+            owner_id=owner.pk,
         ).pk
 
     def _repair_and_migrate_to_latest(self):
@@ -675,6 +626,10 @@ class DuplicateLegacyRequestTagMigrationTests(TransactionTestCase):
         self.addCleanup(self._repair_and_migrate_to_latest)
         self.old_apps = executor.loader.project_state(self.migrate_from).apps
         category = ensure_historical_outdoors_category(self.old_apps)
+        owner = self.old_apps.get_model("backend", "CustomUser").objects.create(
+            email="duplicate-legacy-tag-owner@smokemap.test",
+            password="!",
+        )
         address = self.old_apps.get_model("backend", "Address").objects.create(
             addressString="Duplicate legacy request tag address",
             location=Point(-77, 39, srid=4326),
@@ -685,6 +640,7 @@ class DuplicateLegacyRequestTagMigrationTests(TransactionTestCase):
             description="Migration must reject canonical duplicates.",
             address_id=address.pk,
             tags=["New Tag", "NEW TAG"],
+            owner_id=owner.pk,
         ).pk
 
     def _repair_and_migrate_to_latest(self):

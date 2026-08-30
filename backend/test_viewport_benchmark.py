@@ -2,6 +2,7 @@ import json
 from unittest.mock import Mock, patch
 
 from django.contrib.gis.geos import Point
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import transaction
@@ -320,6 +321,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
         self.assertTrue(Category.objects.filter(pk=benchmark_category.pk).exists())
 
     def test_cleanup_refuses_a_submission_reference_to_namespaced_tag(self):
+        owner = get_user_model().objects.create_user(
+            email="benchmark-cleanup-owner@smokemap.test",
+            password="test",
+        )
         category = Category.objects.create(
             slug="request-tag-cleanup-category",
             name="Request tag cleanup",
@@ -334,6 +339,7 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
             category=category,
             description="Cleanup must not delete this relation.",
             address=address,
+            owner=owner,
         )
         benchmark_tag = Tag.objects.create(name=f"{NAMESPACE}tag_0")
         RequestTag.objects.create(

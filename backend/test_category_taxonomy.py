@@ -1,6 +1,7 @@
 from importlib import import_module
 
 from django.contrib.gis.geos import Point
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.migrations.executor import MigrationExecutor
@@ -27,6 +28,10 @@ EXPECTED_CATEGORIES = {
 class CategoryTaxonomyTests(TestCase):
     def setUp(self):
         self.category = Category.objects.get(slug="outdoors")
+        self.owner = get_user_model().objects.create_user(
+            email="category-owner@smokemap.test",
+            password="test",
+        )
 
     def test_slugs_are_unique_and_issued_slugs_are_immutable(self):
         with self.assertRaises(IntegrityError):
@@ -82,7 +87,7 @@ class CategoryTaxonomyTests(TestCase):
             addressString="Category reference API address",
             location=Point(-77, 39, srid=4326),
         )
-        address.save(omit_geocode=True)
+        address.save()
         place = Place.objects.create(
             name="Category reference API place",
             category=self.category,
@@ -102,7 +107,7 @@ class CategoryTaxonomyTests(TestCase):
             addressString="Protected category relation address",
             location=Point(-77, 39, srid=4326),
         )
-        address.save(omit_geocode=True)
+        address.save()
         place = Place.objects.create(
             name="Protected category place",
             category=self.category,
@@ -114,6 +119,7 @@ class CategoryTaxonomyTests(TestCase):
             category=self.category,
             description="Proposed place",
             address=address,
+            owner=self.owner,
         )
 
         for model in (Place, Request):
@@ -142,6 +148,11 @@ class CategorySlugMigrationTests(TransactionTestCase):
         address_model = old_apps.get_model("backend", "Address")
         place_model = old_apps.get_model("backend", "Place")
         request_model = old_apps.get_model("backend", "Request")
+        user_model = old_apps.get_model("backend", "CustomUser")
+        owner = user_model.objects.create(
+            email="pre-slug-owner@smokemap.test",
+            password="!",
+        )
 
         category_model.objects.all().delete()
         descriptions = dict(
@@ -170,6 +181,7 @@ class CategorySlugMigrationTests(TransactionTestCase):
             category_id=self.category_id,
             description="Existing request",
             address_id=address.pk,
+            owner_id=owner.pk,
         ).pk
 
         executor = MigrationExecutor(connection)
