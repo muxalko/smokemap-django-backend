@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from backend.models import Address, Category, Location, Place, Tag
+from backend.tagging import normalize_tag_text
 
 
 MOCK_PLACES = (
@@ -69,10 +70,20 @@ class Command(BaseCommand):
                 )
                 created_places += int(created)
 
-                tags = [
-                    Tag.objects.get_or_create(name=tag_name)[0]
-                    for tag_name in mock_place["tags"]
-                ]
+                tags = []
+                for tag_name in mock_place["tags"]:
+                    normalized = normalize_tag_text(tag_name)
+                    tag, _created = Tag.objects.get_or_create(
+                        canonical=normalized.canonical,
+                        defaults={
+                            "name": normalized.display,
+                            "is_public": True,
+                        },
+                    )
+                    if not tag.is_public:
+                        tag.is_public = True
+                        tag.save(update_fields=("is_public",))
+                    tags.append(tag)
                 place.tags.set(tags)
 
                 Location.objects.update_or_create(

@@ -7,7 +7,7 @@ from django.core.management.base import CommandError
 from django.db import transaction
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 
-from backend.models import Address, Category, Place, Tag
+from backend.models import Address, Category, Place, Request, RequestTag, Tag
 
 from backend.viewport_benchmark import (
     BENCHMARK_CATEGORY_NAME,
@@ -265,7 +265,10 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
             slug=f"{NAMESPACE}category",
             name=BENCHMARK_CATEGORY_NAME,
         )
-        benchmark_tag = Tag.objects.create(name=f"{NAMESPACE}tag_0")
+        benchmark_tag = Tag.objects.create(
+            name=f"{NAMESPACE}tag_0",
+            is_public=True,
+        )
         benchmark_place = self.create_place(
             f"{NAMESPACE}place_00000",
             benchmark_category,
@@ -315,6 +318,39 @@ class ViewportBenchmarkNamespaceCleanupTests(TransactionTestCase):
 
         self.assertTrue(Place.objects.filter(pk=unrelated_place.pk).exists())
         self.assertTrue(Category.objects.filter(pk=benchmark_category.pk).exists())
+
+    def test_cleanup_refuses_a_submission_reference_to_namespaced_tag(self):
+        category = Category.objects.create(
+            slug="request-tag-cleanup-category",
+            name="Request tag cleanup",
+        )
+        address = Address(
+            addressString="Request tag cleanup address",
+            location=Point(-77.004, 38.85, srid=4326),
+        )
+        Address.objects.bulk_create([address])
+        submission = Request.objects.create(
+            name="Request using reserved benchmark tag",
+            category=category,
+            description="Cleanup must not delete this relation.",
+            address=address,
+        )
+        benchmark_tag = Tag.objects.create(name=f"{NAMESPACE}tag_0")
+        RequestTag.objects.create(
+            request=submission,
+            tag=benchmark_tag,
+            display=f"{NAMESPACE}tag_0",
+            position=0,
+        )
+
+        with self.assertRaisesMessage(
+            RuntimeError,
+            "a request uses a namespaced tag",
+        ):
+            cleanup_benchmark_namespace()
+
+        self.assertTrue(Tag.objects.filter(pk=benchmark_tag.pk).exists())
+        self.assertTrue(RequestTag.objects.filter(request=submission).exists())
 
 
 class ViewportBenchmarkDatabaseIsolationTests(TransactionTestCase):
