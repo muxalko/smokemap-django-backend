@@ -124,7 +124,7 @@ class ViewportPlaceApiTests(TestCase):
             addressString=f"{name} address",
             location=Point(longitude, latitude, srid=4326),
         )
-        address.save(omit_geocode=True)
+        address.save()
         place = Place.objects.create(
             name=name,
             category=category or self.outdoors,
@@ -428,7 +428,7 @@ class AuthorizationMatrixTests(TestCase):
             addressString=f"Test address {suffix}",
             location=f"POINT ({suffix} {suffix})",
         )
-        address.save(omit_geocode=True)
+        address.save()
         return address
 
     def submission(self, owner, suffix):
@@ -438,6 +438,7 @@ class AuthorizationMatrixTests(TestCase):
             description="Pending submission",
             address=self.address(suffix),
             owner=owner,
+            state=Request.State.PENDING,
         )
 
     def error_code(self, result):
@@ -458,18 +459,23 @@ class AuthorizationMatrixTests(TestCase):
 
     def test_submission_creation_requires_active_user_and_assigns_owner(self):
         mutation = """
-            mutation Create($input: RequestInput!) {
-              createRequest(input: $input) { request { id requestedBy } }
+            mutation Create($input: SubmissionV3Input!, $key: String!) {
+              createSubmissionV3(input: $input, idempotencyKey: $key) {
+                submission { id requestedBy state }
+              }
             }
         """
         variables = {
+            "key": "authorization-owner-binding",
             "input": {
                 "name": "Owner-bound submission",
-                "category": str(self.category.pk),
+                "categorySlug": self.category.slug,
                 "description": "Description",
-                "addressString": "[1,2]",
+                "addressLabel": "Owner supplied label",
+                "longitude": 1,
+                "latitude": 2,
                 "tags": [],
-                "website": "https://example.test",
+                "website": "https://smokemap.org",
             }
         }
 
@@ -483,8 +489,11 @@ class AuthorizationMatrixTests(TestCase):
         result = self.graphql.execute(
             mutation, variable_values=variables, context_value=self.context(self.user)
         )
-        request = Request.objects.get(pk=result["data"]["createRequest"]["request"]["id"])
+        request = Request.objects.get(
+            pk=result["data"]["createSubmissionV3"]["submission"]["id"]
+        )
         self.assertEqual(request.owner, self.user)
+        self.assertEqual(request.state, Request.State.DRAFT)
         self.assertIsNone(request.requested_by)
 
     def test_pending_queries_hide_other_users_rows(self):
@@ -506,7 +515,7 @@ class AuthorizationMatrixTests(TestCase):
                 {str(own.pk), str(other.pk)},
             )
 
-    def test_only_moderators_approve_and_self_review_is_denied(self):
+    def test_legacy_approval_is_fail_closed_for_every_role(self):
         submission = self.submission(self.user, 3)
         mutation = """
             mutation Approve($id: ID!) {
@@ -520,6 +529,8 @@ class AuthorizationMatrixTests(TestCase):
             (self.guest, "UNAUTHENTICATED"),
             (self.inactive, "UNAUTHENTICATED"),
             (self.user, "FORBIDDEN"),
+            (self.moderator, "FORBIDDEN"),
+            (self.administrator, "FORBIDDEN"),
         ):
             result = self.graphql.execute(
                 mutation,
@@ -527,6 +538,12 @@ class AuthorizationMatrixTests(TestCase):
                 context_value=self.context(account),
             )
             self.assertEqual(self.error_code(result), code)
+        submission.refresh_from_db()
+        self.assertFalse(submission.approved)
+        self.assertEqual(submission.state, Request.State.PENDING)
+        self.assertFalse(
+            ModerationAudit.objects.filter(target_id=submission.pk).exists()
+        )
 
         own_submission = self.submission(self.moderator, 4)
         result = self.graphql.execute(
@@ -537,25 +554,9 @@ class AuthorizationMatrixTests(TestCase):
         self.assertEqual(self.error_code(result), "FORBIDDEN")
         self.assertTrue(
             ModerationAudit.objects.filter(
-                target_id=own_submission.pk, outcome="denied_self_review"
-            ).exists()
-        )
-
-        result = self.graphql.execute(
-            mutation,
-            variable_values={"id": str(submission.pk)},
-            context_value=self.context(self.moderator),
-        )
-        self.assertNotIn("errors", result)
-        submission.refresh_from_db()
-        self.assertTrue(submission.approved)
-        self.assertEqual(submission.reviewed_by, self.moderator)
-        self.assertTrue(
-            ModerationAudit.objects.filter(
                 actor=self.moderator,
-                action=ModerationAudit.Action.APPROVE,
-                target_id=submission.pk,
-                outcome="succeeded",
+                target_id=own_submission.pk,
+                outcome="denied_self_review",
             ).exists()
         )
 
@@ -860,7 +861,7 @@ class TokenLifecycleTests(TestCase):
             addressString="Bearer protected address",
             location="POINT (1 1)",
         )
-        address.save(omit_geocode=True)
+        address.save()
         return address
 
     def test_verify_rejects_expired_or_malformed_access_tokens(self):
