@@ -39,6 +39,7 @@ from .tokens import (
     issue_token_pair,
     rotate_refresh_token,
 )
+from .tagging import normalize_tag_text
 
 
 class LocalLoggingTests(SimpleTestCase):
@@ -131,7 +132,18 @@ class ViewportPlaceApiTests(TestCase):
             address=address,
             website=f"https://{name.lower().replace(' ', '-')}.example.test",
         )
-        place.tags.set(Tag.objects.get_or_create(name=tag)[0] for tag in tags)
+        place_tags = []
+        for tag_name in tags:
+            normalized = normalize_tag_text(tag_name)
+            tag, _created = Tag.objects.get_or_create(
+                canonical=normalized.canonical,
+                defaults={"name": normalized.display, "is_public": True},
+            )
+            if not tag.is_public:
+                Tag.objects.filter(pk=tag.pk).update(is_public=True)
+                tag.is_public = True
+            place_tags.append(tag)
+        place.tags.set(place_tags)
         return place
 
     def get_viewport(self, **params):

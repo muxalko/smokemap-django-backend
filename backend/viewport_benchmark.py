@@ -9,7 +9,8 @@ from django.db import connection, transaction
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
-from backend.models import Address, Category, Image, Place, Request, Tag
+from backend.models import Address, Category, Image, Place, Request, RequestTag, Tag
+from backend.tagging import normalize_tag_text
 from backend.views import (
     VIEWPORT_RESPONSE_LIMIT_BYTES,
     VIEWPORT_RESULT_LIMIT,
@@ -106,6 +107,8 @@ def cleanup_benchmark_namespace():
         tag__in=namespaced_tags
     ).exists():
         unsafe_references.append("a namespaced place uses a non-benchmark tag")
+    if RequestTag.objects.filter(tag__in=namespaced_tags).exists():
+        unsafe_references.append("a request uses a namespaced tag")
     if Image.objects.filter(place__in=namespaced_places).exists():
         unsafe_references.append("an image uses a namespaced place")
     if unsafe_references:
@@ -126,7 +129,16 @@ def seed_benchmark_dataset():
         name=BENCHMARK_CATEGORY_NAME,
         description="Reserved category for the issue #79 viewport benchmark.",
     )
-    tags = [Tag(name=f"{NAMESPACE}tag_{index}") for index in range(TAG_COUNT)]
+    tags = []
+    for index in range(TAG_COUNT):
+        normalized = normalize_tag_text(f"{NAMESPACE}tag_{index}")
+        tags.append(
+            Tag(
+                name=normalized.display,
+                canonical=normalized.canonical,
+                is_public=True,
+            )
+        )
     Tag.objects.bulk_create(tags)
 
     addresses = []

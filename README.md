@@ -36,6 +36,30 @@ key. Their existing numeric category inputs, and the viewport category-ID
 filter, remain compatibility interfaces until the submission-input work changes
 them to exact slug lookup.
 
+## Tag proposals and public vocabulary
+
+Submission tags are optional free-form proposals. Each submission accepts at
+most 10 distinct strings through the existing list-of-strings GraphQL input and
+retains the owner's order. The backend Unicode NFKC-normalizes each value,
+trims it, collapses internal whitespace, and then requires 3 through 50 Unicode
+characters. Duplicate detection uses the normalized value's Unicode casefold;
+null, empty, too-short, too-long, and duplicate values are rejected before any
+tag row is written.
+
+All request and place associations use one relational `Tag` vocabulary keyed
+by that canonical value. Each request-tag association separately keeps the
+normalized display spelling submitted for that request, so request history is
+an immutable proposal snapshot even when multiple requests share a canonical
+tag. An existing public tag is reused without changing its established public
+display spelling. A newly proposed tag remains private and is omitted from the
+global GraphQL `tags` reference query until a moderator successfully approves a
+submission using it. Approval promotes the shared tag using the approved
+request's display spelling unless it is already public, and attaches the same
+tag row to the resulting `Place` in one database transaction. A failed approval
+therefore cannot publish vocabulary or leave partial place/tag state. Public
+tag objects expose only `id` and `name`; canonical keys and moderation
+visibility are internal fields.
+
 ## Viewport place API
 
 The public, read-only map contract is:

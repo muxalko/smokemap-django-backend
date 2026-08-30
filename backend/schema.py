@@ -11,6 +11,7 @@ from .models import (
     ModerationAudit,
     Place,
     Request,
+    RequestTag,
     Tag,
 )
 from .permissions import (
@@ -28,6 +29,8 @@ from django.contrib.auth import authenticate
 import graphql_geojson
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Prefetch
+from .tagging import attach_request_tags, normalize_submission_tags
 from .tokens import (
     INVALID_TOKEN,
     TokenLifecycleError,
@@ -99,6 +102,7 @@ class AddressType(graphql_geojson.GeoJSONType):
         # )
 
 class RequestType(DjangoObjectType):
+    tags = graphene.List(graphene.NonNull(graphene.String), required=True)
     approved_by = graphene.String(
         description="Deprecated compatibility field containing the reviewer ID."
     )
@@ -111,6 +115,9 @@ class RequestType(DjangoObjectType):
 
     def resolve_requested_by(self, info):
         return str(self.owner_id) if self.owner_id else None
+
+    def resolve_tags(self, info):
+        return [request_tag.display for request_tag in self.request_tags.all()]
 
     class Meta:
         model = Request
@@ -153,6 +160,17 @@ class AuthenticationRequired(graphene.ObjectType):
         return AuthenticationRequired(
             message="You must be logged in to perform this action"
         )
+
+
+def request_queryset_with_tags(queryset):
+    return queryset.prefetch_related(
+        Prefetch(
+            "request_tags",
+            queryset=RequestTag.objects.select_related("tag").order_by("position"),
+        )
+    )
+
+
 #################################QUERIES###############################
 
 class Query(graphene.ObjectType):
@@ -212,8 +230,7 @@ class Query(graphene.ObjectType):
         return Category.objects.all()
      
     def resolve_tags(root, info):
-        # Querying a list
-        return Tag.objects.all()
+        return Tag.objects.filter(is_public=True)
       
     def resolve_addresses(root, info):
         return Address.objects.filter(place__isnull=False).distinct()
@@ -227,7 +244,7 @@ class Query(graphene.ObjectType):
 
     def resolve_requests(root, info):
         user = require_active_user(info)
-        requests = Request.objects.filter(approved=False)
+        requests = request_queryset_with_tags(Request.objects.filter(approved=False))
         if is_moderator(user):
             return requests
         return requests.filter(owner=user)
@@ -235,11 +252,11 @@ class Query(graphene.ObjectType):
     # @login_required
     def resolve_requests_to_approve(root, info, **kwargs):
         require_moderator(info)
-        return Request.objects.filter(approved=False)
+        return request_queryset_with_tags(Request.objects.filter(approved=False))
 
     def resolve_request_by_id(root, info, id):
         user = require_active_user(info)
-        requests = Request.objects.filter(approved=False)
+        requests = request_queryset_with_tags(Request.objects.filter(approved=False))
         if not is_moderator(user):
             requests = requests.filter(owner=user)
         request = requests.filter(pk=id).first()
@@ -249,7 +266,9 @@ class Query(graphene.ObjectType):
 
     def resolve_requests_by_name(root, info, name):
         user = require_active_user(info)
-        requests = Request.objects.filter(approved=False, name=name)
+        requests = request_queryset_with_tags(
+            Request.objects.filter(approved=False, name=name)
+        )
         if not is_moderator(user):
             requests = requests.filter(owner=user)
         return requests.first()
@@ -298,6 +317,7 @@ class CreateRequest(graphene.Mutation):
     @transaction.atomic
     def mutate(cls, root, info, input):
         user = require_active_user(info)
+        normalized_tags = normalize_submission_tags(getattr(input, "tags", None))
 
         # apply validation steps
         validated = True
@@ -380,16 +400,16 @@ class CreateRequest(graphene.Mutation):
             request.name = input.name
             request.category = category
             request.description = input.description
-            request.tags = input.tags
             request.website = input.website
             request.address = myaddress
             request.owner = user
         
             # request.imageurl = input.imageurl
 
-            logger.debug("Request(Category: %s, Name: %s, Desc: %s, Address: %s, Tags: %s, Requested by :%s)",
-                request.category, request.name, request.description, request.address, request.tags, request.requested_by)
+            logger.debug("Request(Category: %s, Name: %s, Desc: %s, Address: %s, Tag count: %s, Requested by: %s)",
+                request.category, request.name, request.description, request.address, len(normalized_tags), request.requested_by)
             request.save()
+            attach_request_tags(request, normalized_tags)
 
         # if len(input.images) > 1:
         #     for file in  input.images:
@@ -429,6 +449,91 @@ class RequestApproveInput(graphene.InputObjectType):
     approved_comment = graphene.String()
 
 
+def approve_legacy_request(request_id, actor, approved_comment):
+    with transaction.atomic():
+        request = request_queryset_with_tags(
+            Request.objects.select_for_update().filter(
+                pk=request_id,
+                approved=False,
+            )
+        ).first()
+        if request is None:
+            graphql_authorization_error("Submission not found", NOT_FOUND)
+        if request.owner_id == actor.pk:
+            graphql_authorization_error(
+                "Reviewers cannot approve their own submission",
+                FORBIDDEN,
+            )
+
+        existing_place = Place.objects.filter(name=request.name).first()
+        if existing_place is not None:
+            raise ValidationError(
+                "There is already a place with the same name " + existing_place.name,
+                params={"value": request},
+            )
+
+        request_tags = list(request.request_tags.all())
+        locked_tags = {
+            tag.pk: tag
+            for tag in Tag.objects.select_for_update()
+            .filter(pk__in=sorted(link.tag_id for link in request_tags))
+            .order_by("pk")
+        }
+        ordered_tags = []
+        for request_tag in request_tags:
+            tag = locked_tags[request_tag.tag_id]
+            if not tag.is_public:
+                tag.name = request_tag.display
+                tag.is_public = True
+                tag.save(update_fields=("name", "is_public"))
+            ordered_tags.append(tag)
+
+        new_place = Place.objects.create(
+            name=request.name,
+            category=request.category,
+            description=request.description,
+            address=request.address,
+            website=request.website,
+        )
+        new_place.tags.set(ordered_tags)
+
+        for image in Image.objects.filter(request_id=request.pk):
+            if not image.place_id:
+                image.place_id = new_place.pk
+                image.save(update_fields=("place",))
+
+        Location.objects.create(
+            place_id=str(new_place.pk),
+            name=new_place.name,
+            category=new_place.category_id,
+            info=new_place.description,
+            address=new_place.address.addressString,
+            geom=new_place.address.location,
+            tags=",".join(tag.name for tag in ordered_tags),
+        )
+
+        request.approved = True
+        request.date_approved = timezone.now()
+        request.reviewed_by = actor
+        request.approved_comment = approved_comment
+        request.save(
+            update_fields=(
+                "approved",
+                "date_approved",
+                "reviewed_by",
+                "approved_comment",
+                "date_updated",
+            )
+        )
+        ModerationAudit.objects.create(
+            actor=actor,
+            action=ModerationAudit.Action.APPROVE,
+            target_type="request",
+            target_id=request.pk,
+        )
+        return request
+
+
 class ApproveRequest(graphene.Mutation):
 
     class Arguments:
@@ -441,10 +546,6 @@ class ApproveRequest(graphene.Mutation):
     def mutate(cls, root, info, input, id):
         actor = require_moderator(info)
         logger.debug("Start approval process for request id: %s", id)
-
-        # apply validation steps
-        validated = True
-        validation_message = ''
         request = Request.objects.filter(pk=id, approved=False).first()
         if request is None:
             graphql_authorization_error("Submission not found", NOT_FOUND)
@@ -459,120 +560,11 @@ class ApproveRequest(graphene.Mutation):
             graphql_authorization_error(
                 "Reviewers cannot approve their own submission", FORBIDDEN
             )
-        logger.debug(request)
-
-        logger.debug("Check if place already exists: %s %s", request.name, request.address)
-        # Check if place already exists
-        try:
-            place = Place.objects.get(name=request.name)#,address=request.address.id)
-            logger.debug("Found: %s", place)
-            validated = False
-            validation_message = 'There is already a place with the same name ' + place.name
-        except Exception as place_e:
-            logger.debug(place_e)
-        
-        if (not validated):
-                logger.debug(validation_message)
-                raise ValidationError(
-                    (validation_message),
-                    params={'value': request},
-                )
-        
-        newPlace = Place()
-        newPlace.name = request.name
-        newPlace.category = request.category
-        newPlace.description = request.description
-        newPlace.address = request.address
-        newPlace.website = request.website
-
-        newPlace.save()
-        logger.debug("New place was created: %s", newPlace)
-
-        ##### PROCESS TAGS #####
-        # find existing 
-        tags = Tag.objects.filter(name__in=request.tags)
-        logger.debug("Found tags: %s %s", tags, len(tags))
-        # if None found, create as new tags
-        if (len(tags)<1):
-            # create new tags
-            # TODO: check how to make a bulk creation
-            for tag in request.tags:
-                newTag = Tag()
-                newTag.name = tag.lower()
-                newTag.save()
-                # assign to place
-                newPlace.tags.add(newTag)
-                logger.debug("New tag was added: %s", newTag)
-        else:
-            # check for not existing
-            for tag in request.tags:
-                logger.debug("Check if tag ",tag,"is in tags",tags)
-                found = next((x for x in tags if x.name == tag), None)
-                if found:
-                    logger.debug("Ignore existing tag: %s",tag)
-                    # assign to place
-                    newPlace.tags.add(found)
-                else:
-                    # create
-                    newTag = Tag()
-                    newTag.name = tag.lower()
-                    newTag.save()
-                    # assign to place
-                    newPlace.tags.add(newTag)
-                    logger.debug("New tag was added: %s", newTag)
-
-        # tags = Tag.objects.filter(name__in=request.tags)
-        # newPlace.tags.set(tags)
-        # dct = {name: classthing(name) for name in request.tags}
-        
-        ##### PROCESS Images #####
-        # find existing images and update place_id if not exist
-        images = Image.objects.filter(request_id=request.id)
-        logger.debug("Found images: %s, length=%s", images, len(images))
-        if (len(images)>0):
-            for image in images:
-                if not image.place_id:
-                    image.place_id = newPlace.id
-                    image.save()
-                    logger.debug("Image %s was updated with place #%s",image.name, image.place_id)
-                else:
-                    logger.debug("Error: Image %s already has place #%s",image.name, image.place_id)
-        else:
-            logger.debug("No images found associated with request #%s", request.id)
-
-        # create location for showing on the map
-        # location consist of lightweight model for fast showing on the map
-        location = Location()
-        location.place_id = str(newPlace.id)
-        location.name = newPlace.name
-        location.category = newPlace.category.id
-        location.info = newPlace.description
-        location.address = newPlace.address.addressString
-        location.geom = newPlace.address.location
-        tags = newPlace.tags.values_list('name',flat=True)
-        if (tags):
-            location.tags = ','.join(tags)
-       
-        location.save()
-        logger.debug("Saved location: %s", location)
-
-        # set request as approved
-        request.approved = True
-        request.date_approved = timezone.now()
-        request.reviewed_by = actor
-        request.approved_comment = input.approved_comment
-
-        request.save()
-
-        ModerationAudit.objects.create(
-            actor=actor,
-            action=ModerationAudit.Action.APPROVE,
-            target_type="request",
-            target_id=request.pk,
+        request = approve_legacy_request(
+            request.pk,
+            actor,
+            input.approved_comment,
         )
-
-        logger.debug("The request (id=%s) was updated with: %s",request.id, newPlace)
-
         return ApproveRequest(request=request)
 
 class ImageInput(graphene.InputObjectType):

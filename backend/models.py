@@ -2,7 +2,6 @@ from django.db import models
 from geopy.geocoders import Nominatim
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
-from django.contrib.postgres.fields import ArrayField
 from django.contrib.gis import geos
 from django.utils import timezone
 from django.conf import settings
@@ -78,11 +77,26 @@ class Category(models.Model):
 
 class Tag(models.Model):
     name = models.CharField(unique=True, max_length=50)
+    canonical = models.CharField(unique=True, max_length=50, editable=False)
+    is_public = models.BooleanField(default=False)
     # the tag belongs to a category
     # category = models.ForeignKey(Category, blank=True, on_delete=models.PROTECT)
 
     class Meta:
         verbose_name_plural = 'Tags'
+
+    def save(self, *args, **kwargs):
+        from .tagging import normalize_tag_text
+
+        normalized = normalize_tag_text(self.name)
+        self.name = normalized.display
+        self.canonical = normalized.canonical
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {
+                "name",
+                "canonical",
+            }
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -128,19 +142,21 @@ class Address(models.Model):
     def __str__(self):
         return "{} ({},{})".format(self.addressString, self.location[0], self.location[1])
 
+
 def get_tags_default():
-    # return list(dict([]).keys())
+    """Retained for the serialized default in applied migration 0001."""
     return []
+
 
 class Request(models.Model):
     name = models.CharField(max_length=100)
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
     description = models.CharField(max_length=255)
     address = models.ForeignKey(Address, on_delete=models.PROTECT)
-    # just aray of strings on request
-    tags = ArrayField(
-        models.CharField(null=True, max_length=50),
-        default=get_tags_default
+    tags = models.ManyToManyField(
+        Tag,
+        related_name="requests",
+        through="RequestTag",
     )
     website = models.CharField(max_length=255, null=True)
     date_created = models.DateTimeField(auto_now_add=True)
@@ -176,6 +192,42 @@ class Request(models.Model):
 
     def __str__(self):
         return "{}: {} - {}, {}".format(self.date_created, self.name, self.description, self.address.addressString)
+
+
+class RequestTag(models.Model):
+    request = models.ForeignKey(
+        Request,
+        on_delete=models.CASCADE,
+        related_name="request_tags",
+    )
+    tag = models.ForeignKey(
+        Tag,
+        on_delete=models.PROTECT,
+        related_name="request_tags",
+    )
+    display = models.CharField(max_length=50)
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ["position"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("request", "tag"),
+                name="unique_request_tag",
+            ),
+            models.UniqueConstraint(
+                fields=("request", "position"),
+                name="unique_request_tag_position",
+            ),
+            models.CheckConstraint(
+                check=models.Q(position__gte=0, position__lt=10),
+                name="request_tag_position_range",
+            ),
+            models.CheckConstraint(
+                check=models.Q(display__regex=r"^.{3,50}$"),
+                name="request_tag_display_length",
+            ),
+        ]
 
 
 class ModerationAudit(models.Model):
