@@ -24,6 +24,26 @@ public `AWS_STORAGE_BUCKET_NAME`. `MEDIA_STORAGE_IDENTIFIER` is a stable,
 non-secret identifier for that storage binding; changing either value does not
 rewrite bindings already recorded on media intents.
 
+Private media supports separate S3 endpoint URLs for backend object operations
+and browser uploads. `MEDIA_STORAGE_INTERNAL_ENDPOINT_URL` is used for backend
+reads, sealing, metadata checks, and deletion. `MEDIA_UPLOAD_ENDPOINT_URL` is
+used only to sign presigned POST uploads, so its hostname must be reachable by
+the browser. If either variable is absent, it inherits `AWS_S3_ENDPOINT_URL` for
+backwards compatibility. An explicitly empty value selects the AWS SDK's
+default endpoint resolution.
+
+For local root Compose, the backend can reach MinIO by its service name while a
+browser must use the host-published port. For example, when MinIO port 9000 is
+published as host port 9000:
+
+```sh
+MEDIA_STORAGE_INTERNAL_ENDPOINT_URL=http://storage:9000
+MEDIA_UPLOAD_ENDPOINT_URL=http://localhost:9000
+```
+
+If Compose publishes a different host port, use that published port in
+`MEDIA_UPLOAD_ENDPOINT_URL`.
+
 Each intent records separate immutable keys: the compatibility `object_key`
 field is the client-presigned upload target, while `sealed_object_key` is a
 backend-only destination for the exact bytes verified from the bounded local

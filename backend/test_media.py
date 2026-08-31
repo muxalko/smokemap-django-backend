@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 import queue
 import uuid
 from importlib import import_module
@@ -8,8 +9,9 @@ from io import StringIO
 from datetime import timedelta
 from types import SimpleNamespace
 from threading import Thread
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.core.management import call_command
@@ -107,6 +109,132 @@ class FakeMediaStorage:
 
 
 class PresignPolicyTests(SimpleTestCase):
+    @override_settings(
+        AWS_ACCESS_KEY_ID="private-access-key",
+        AWS_SECRET_ACCESS_KEY="private-secret-key",
+        AWS_S3_REGION_NAME="us-east-1",
+        AWS_S3_ADDRESSING_STYLE="path",
+        MEDIA_STORAGE_INTERNAL_ENDPOINT_URL="http://storage:9000",
+        MEDIA_UPLOAD_ENDPOINT_URL="http://localhost:19000",
+    )
+    def test_internal_operations_and_upload_signing_use_separate_clients(self):
+        internal_client = Mock()
+        upload_client = Mock()
+        internal_client.get_object.return_value = {"Body": io.BytesIO(b"object")}
+        internal_client.head_object.return_value = {"ContentLength": 6}
+        upload_client.generate_presigned_post.return_value = {
+            "url": "http://localhost:19000/private-media",
+            "fields": {},
+        }
+
+        with patch(
+            "backend.media_storage.boto3.client",
+            side_effect=[internal_client, upload_client],
+        ) as client_factory:
+            storage = S3MediaStorage()
+
+        self.assertEqual(client_factory.call_count, 2)
+        internal_construction, upload_construction = client_factory.call_args_list
+        self.assertEqual(internal_construction.args, ("s3",))
+        self.assertEqual(upload_construction.args, ("s3",))
+        self.assertEqual(
+            internal_construction.kwargs["endpoint_url"], "http://storage:9000"
+        )
+        self.assertEqual(
+            upload_construction.kwargs["endpoint_url"], "http://localhost:19000"
+        )
+        for construction in (internal_construction, upload_construction):
+            self.assertEqual(construction.kwargs["aws_access_key_id"], "private-access-key")
+            self.assertEqual(
+                construction.kwargs["aws_secret_access_key"], "private-secret-key"
+            )
+            self.assertEqual(construction.kwargs["region_name"], "us-east-1")
+            self.assertEqual(construction.kwargs["config"].signature_version, "s3v4")
+            self.assertEqual(
+                construction.kwargs["config"].s3, {"addressing_style": "path"}
+            )
+
+        storage.issue_upload(
+            bucket="private-media",
+            key="submission-media/42/upload",
+            mime_type="image/png",
+            maximum_size=100,
+            expires_in=600,
+        )
+        with storage.open_object(bucket="private-media", key="source") as body:
+            self.assertEqual(body.read(), b"object")
+        sealed_body = io.BytesIO(b"sealed")
+        storage.seal_object(
+            bucket="private-media",
+            key="sealed",
+            body=sealed_body,
+            content_type="image/png",
+            content_length=6,
+        )
+        self.assertEqual(storage.object_size(bucket="private-media", key="sealed"), 6)
+        storage.delete_object(bucket="private-media", key="source")
+        self.assertFalse(storage.object_is_absent(bucket="private-media", key="sealed"))
+
+        self.assertEqual(
+            upload_client.method_calls,
+            [
+                call.generate_presigned_post(
+                    Bucket="private-media",
+                    Key="submission-media/42/upload",
+                    Fields={"Content-Type": "image/png"},
+                    Conditions=[
+                        {"key": "submission-media/42/upload"},
+                        {"Content-Type": "image/png"},
+                        ["content-length-range", 1, 100],
+                    ],
+                    ExpiresIn=600,
+                )
+            ],
+        )
+        self.assertEqual(
+            internal_client.method_calls,
+            [
+                call.get_object(Bucket="private-media", Key="source"),
+                call.put_object(
+                    Bucket="private-media",
+                    Key="sealed",
+                    Body=sealed_body,
+                    ContentType="image/png",
+                    ContentLength=6,
+                ),
+                call.head_object(Bucket="private-media", Key="sealed"),
+                call.delete_object(Bucket="private-media", Key="source"),
+                call.head_object(Bucket="private-media", Key="sealed"),
+            ],
+        )
+
+    def test_media_endpoints_fall_back_to_legacy_endpoint_setting(self):
+        if {
+            "MEDIA_STORAGE_INTERNAL_ENDPOINT_URL",
+            "MEDIA_UPLOAD_ENDPOINT_URL",
+        } & os.environ.keys():
+            self.skipTest("explicit private-media endpoint variables are configured")
+
+        self.assertEqual(
+            settings.MEDIA_STORAGE_INTERNAL_ENDPOINT_URL, settings.AWS_S3_ENDPOINT_URL
+        )
+        self.assertEqual(settings.MEDIA_UPLOAD_ENDPOINT_URL, settings.AWS_S3_ENDPOINT_URL)
+
+    @override_settings(
+        MEDIA_STORAGE_INTERNAL_ENDPOINT_URL="",
+        MEDIA_UPLOAD_ENDPOINT_URL="",
+    )
+    def test_empty_media_endpoints_use_aws_sdk_default_resolution(self):
+        with patch(
+            "backend.media_storage.boto3.client", side_effect=[Mock(), Mock()]
+        ) as client_factory:
+            S3MediaStorage()
+
+        self.assertEqual(
+            [construction.kwargs["endpoint_url"] for construction in client_factory.call_args_list],
+            [None, None],
+        )
+
     def test_exact_private_post_policy_has_only_intent_key_type_and_bounded_size(self):
         client = Mock()
         client.generate_presigned_post.return_value = {"url": "https://s3", "fields": {}}
@@ -156,14 +284,19 @@ class PresignPolicyTests(SimpleTestCase):
 
     def test_bad_storage_configuration_is_wrapped_without_endpoint_details(self):
         endpoint = "https://secret-internal-storage.invalid"
-        with patch(
-            "backend.media_storage.boto3.client",
-            side_effect=ValueError(endpoint),
+        for side_effect in (
+            [ValueError(endpoint)],
+            [Mock(), ValueError(endpoint)],
         ):
-            with self.assertRaises(StorageOperationError) as caught:
-                S3MediaStorage()
+            with self.subTest(failing_client=len(side_effect)):
+                with patch(
+                    "backend.media_storage.boto3.client",
+                    side_effect=side_effect,
+                ):
+                    with self.assertRaises(StorageOperationError) as caught:
+                        S3MediaStorage()
 
-        self.assertNotIn(endpoint, str(caught.exception))
+                self.assertNotIn(endpoint, str(caught.exception))
 
 
 @override_settings(
