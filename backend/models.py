@@ -235,6 +235,7 @@ class RequestTag(models.Model):
 
 class SubmissionOperation(models.TextChoices):
     CREATE = "submission.create.v3", "Create submission"
+    EDIT = "submission.edit.v3", "Edit submission"
     FINALIZE = "submission.finalize.v3", "Finalize submission"
     EXPIRE = "submission.expire.v3", "Expire submission"
     WITHDRAW = "submission.withdraw.v4", "Withdraw submission"
@@ -499,6 +500,7 @@ class SubmissionIdempotency(models.Model):
                     | models.Q(
                         operation__in=[
                             SubmissionOperation.CREATE,
+                            SubmissionOperation.EDIT,
                             SubmissionOperation.FINALIZE,
                             SubmissionOperation.EXPIRE,
                             SubmissionOperation.WITHDRAW,
@@ -551,6 +553,14 @@ class SubmissionLifecycleEvent(models.Model):
                     models.Q(
                         operation=SubmissionOperation.CREATE,
                         from_state__isnull=True,
+                        to_state=Request.State.DRAFT,
+                    )
+                    # An edit is content evidence, not a state change. It is still a
+                    # durable immutable operation record, so it is modelled as the
+                    # only self-transition the database will accept.
+                    | models.Q(
+                        operation=SubmissionOperation.EDIT,
+                        from_state=Request.State.DRAFT,
                         to_state=Request.State.DRAFT,
                     )
                     | models.Q(

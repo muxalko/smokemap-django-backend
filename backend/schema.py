@@ -32,7 +32,11 @@ from django.db.models import Prefetch, Q
 from .submissions import (
     IdempotencyConflict,
     SubmissionInputError,
+    SubmissionOperationError,
+    SubmissionSnapshot,
     create_submission,
+    edit_submission,
+    finalize_submission,
 )
 from .media import (
     MediaInputError,
@@ -433,6 +437,40 @@ class SubmissionV3Input(graphene.InputObjectType):
     website = graphene.String()
 
 
+class SubmissionV3SnapshotType(graphene.ObjectType):
+    id = graphene.ID(required=True)
+    state = graphene.String(required=True)
+    name = graphene.String(required=True)
+    category_slug = graphene.String(required=True)
+    longitude = graphene.Float(required=True)
+    latitude = graphene.Float(required=True)
+    address_label = graphene.String()
+    tags = graphene.List(graphene.NonNull(graphene.String), required=True)
+    description = graphene.String()
+    website = graphene.String()
+
+    @staticmethod
+    def resolve_id(root: SubmissionSnapshot, info):
+        return str(root.submission_id)
+
+    @staticmethod
+    def resolve_tags(root: SubmissionSnapshot, info):
+        return list(root.tags)
+
+
+def _submission_v3_raw_input(input):
+    return {
+        "name": input.name,
+        "category_slug": input.category_slug,
+        "longitude": input.longitude,
+        "latitude": input.latitude,
+        "address_label": getattr(input, "address_label", None),
+        "tags": getattr(input, "tags", None),
+        "description": getattr(input, "description", None),
+        "website": getattr(input, "website", None),
+    }
+
+
 class CreateSubmissionV3(graphene.Mutation):
     class Arguments:
         idempotency_key = graphene.String(required=True)
@@ -444,21 +482,11 @@ class CreateSubmissionV3(graphene.Mutation):
     @classmethod
     def mutate(cls, root, info, idempotency_key, input):
         actor = require_active_user(info)
-        raw_input = {
-            "name": input.name,
-            "category_slug": input.category_slug,
-            "longitude": input.longitude,
-            "latitude": input.latitude,
-            "address_label": getattr(input, "address_label", None),
-            "tags": getattr(input, "tags", None),
-            "description": getattr(input, "description", None),
-            "website": getattr(input, "website", None),
-        }
         try:
             submission, replayed = create_submission(
                 actor,
                 idempotency_key,
-                raw_input,
+                _submission_v3_raw_input(input),
             )
         except SubmissionInputError as error:
             raise GraphQLError(
@@ -476,6 +504,71 @@ class CreateSubmissionV3(graphene.Mutation):
                 "Submission could not be created",
                 extensions={"code": "SUBMISSION_CREATE_FAILED"},
             ) from error
+        return cls(submission=submission, replayed=replayed)
+
+
+def _raise_submission_graphql_error(error, failure_code):
+    """Map service outcomes onto stable, non-sensitive GraphQL error codes."""
+    if isinstance(error, SubmissionInputError):
+        raise GraphQLError(
+            str(error),
+            extensions={"code": "INVALID_SUBMISSION", "field": error.field},
+        ) from error
+    if isinstance(error, IdempotencyConflict):
+        raise GraphQLError(
+            str(error),
+            extensions={"code": "IDEMPOTENCY_CONFLICT"},
+        ) from error
+    if isinstance(error, SubmissionOperationError):
+        raise GraphQLError(str(error), extensions={"code": error.code}) from error
+    logger.exception("Submission operation failed after validation")
+    raise GraphQLError(
+        "Submission could not be updated",
+        extensions={"code": failure_code},
+    ) from error
+
+
+class EditSubmissionV3(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+        input = SubmissionV3Input(required=True)
+
+    submission = graphene.Field(SubmissionV3SnapshotType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key, input):
+        actor = require_active_user(info)
+        try:
+            submission, replayed = edit_submission(
+                actor,
+                submission_id,
+                idempotency_key,
+                _submission_v3_raw_input(input),
+            )
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_EDIT_FAILED")
+        return cls(submission=submission, replayed=replayed)
+
+
+class FinalizeSubmissionV3(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    submission = graphene.Field(SubmissionV3SnapshotType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            submission, replayed = finalize_submission(
+                actor, submission_id, idempotency_key
+            )
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_FINALIZE_FAILED")
         return cls(submission=submission, replayed=replayed)
 
 
@@ -840,6 +933,8 @@ class Mutation(graphene.ObjectType):
     revoke_token = Revoke.Field()
     create_request = CreateRequest.Field()
     create_submission_v3 = CreateSubmissionV3.Field()
+    edit_submission_v3 = EditSubmissionV3.Field()
+    finalize_submission_v3 = FinalizeSubmissionV3.Field()
     create_media_upload_intent = CreateMediaUploadIntent.Field()
     issue_media_upload_intent = IssueMediaUploadIntent.Field()
     renew_media_upload_intent = RenewMediaUploadIntent.Field()
