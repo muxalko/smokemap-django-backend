@@ -508,6 +508,8 @@ AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME","")
 AWS_S3_REGION_NAME = os.environ.get("AWS_REGION","")
 AWS_S3_ENDPOINT_URL = os.environ.get("AWS_S3_ENDPOINT_URL","")
 AWS_S3_ADDRESSING_STYLE = os.environ.get("AWS_S3_ADDRESSING_STYLE","auto")
+MEDIA_STORAGE_BUCKET_NAME = os.environ.get("MEDIA_STORAGE_BUCKET_NAME", "")
+MEDIA_STORAGE_IDENTIFIER = os.environ.get("MEDIA_STORAGE_IDENTIFIER", "s3-private")
 
 INSTALLED_APPS = []
 # Application definition
