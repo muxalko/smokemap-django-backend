@@ -16,6 +16,32 @@ Pull requests and pushes to `development` independently run the Django system
 check and complete backend suite against an isolated PostGIS service. CI also
 scans the full Git history with Gitleaks and redacts any detected values.
 
+## Private submission media operations
+
+Owner-bound draft media uses a private object-storage bucket configured by
+`MEDIA_STORAGE_BUCKET_NAME`. It must be nonempty and different from the legacy
+public `AWS_STORAGE_BUCKET_NAME`. `MEDIA_STORAGE_IDENTIFIER` is a stable,
+non-secret identifier for that storage binding; changing either value does not
+rewrite bindings already recorded on media intents.
+
+Each intent records separate immutable keys: the compatibility `object_key`
+field is the client-presigned upload target, while `sealed_object_key` is a
+backend-only destination for the exact bytes verified from the bounded local
+spool. The sealed key is never returned or presigned and is the only key an
+attached managed image may reference.
+
+Deployments must schedule `python manage.py process_media_cleanup` periodically.
+The command expires abandoned intents, retries exact-key object deletion,
+removes stale client-upload objects after verified bytes have been sealed, and
+redacts expired upload authorizations from idempotency evidence. This repository
+does not prescribe a scheduler; use the deployment platform's periodic-job
+facility and monitor command failures.
+
+Draft request media is intentionally absent from generic `Request.imageSet` and
+public `Place.imageSet` relations. Authorized clients receive M3 private request
+media only through the owner-bound media mutation responses. Approved legacy
+place images remain available through the public place image relation.
+
 ## Category reference data
 
 Categories are administrator-managed physical-setting reference data. Clients

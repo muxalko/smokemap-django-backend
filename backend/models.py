@@ -1,5 +1,9 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
+from django.db.models import F, Value
+from django.db.models.lookups import LessThanOrEqual
 from django.utils import timezone
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
@@ -236,6 +240,212 @@ class SubmissionOperation(models.TextChoices):
     WITHDRAW = "submission.withdraw.v4", "Withdraw submission"
     APPROVE = "submission.approve.v4", "Approve submission"
     REJECT = "submission.reject.v4", "Reject submission"
+    MEDIA_CREATE = "media.intent.create.v3", "Create media intent"
+    MEDIA_ISSUE = "media.intent.issue.v3", "Issue media upload"
+    MEDIA_RENEW = "media.intent.renew.v3", "Renew media upload"
+    MEDIA_VERIFY = "media.intent.verify.v3", "Verify media upload"
+    MEDIA_ATTACH = "media.intent.attach.v3", "Attach verified media"
+    MEDIA_EXPIRE = "media.intent.expire.v3", "Expire media intent"
+    MEDIA_CLEANUP = "media.intent.cleanup.v3", "Clean up media object"
+
+
+class MediaUploadIntent(models.Model):
+    class State(models.TextChoices):
+        CREATED = "created", "Created"
+        ISSUED = "issued", "Issued"
+        VERIFIED = "verified", "Verified"
+        ATTACHED = "attached", "Attached"
+        FAILED = "failed", "Failed"
+        EXPIRED = "expired", "Expired"
+        CLEANUP_PENDING = "cleanup_pending", "Cleanup pending"
+        DELETED = "deleted", "Deleted"
+
+    RESERVING_STATES = (State.CREATED, State.ISSUED, State.VERIFIED)
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.ForeignKey(
+        Request,
+        on_delete=models.PROTECT,
+        related_name="media_upload_intents",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="media_upload_intents",
+    )
+    state = models.CharField(
+        max_length=24,
+        choices=State.choices,
+        default=State.CREATED,
+    )
+    slot = models.PositiveSmallIntegerField()
+    storage_identifier = models.CharField(max_length=64, editable=False)
+    storage_bucket = models.CharField(max_length=255, editable=False)
+    # ``object_key`` is retained as the client-writable upload target for
+    # migration compatibility. Attachments only ever use sealed_object_key.
+    object_key = models.CharField(max_length=255, unique=True, editable=False)
+    sealed_object_key = models.CharField(max_length=255, unique=True, editable=False)
+    expected_mime = models.CharField(max_length=32, editable=False)
+    declared_byte_size = models.PositiveIntegerField(editable=False)
+    declared_sha256 = models.CharField(max_length=64, editable=False)
+    original_filename = models.CharField(max_length=255, blank=True, default="")
+
+    server_byte_size = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    server_sha256 = models.CharField(max_length=64, blank=True, default="", editable=False)
+    detected_mime = models.CharField(max_length=32, blank=True, default="", editable=False)
+    width = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+
+    failure_code = models.CharField(max_length=64, blank=True, default="", editable=False)
+    failure_at = models.DateTimeField(blank=True, null=True, editable=False)
+    verification_attempts = models.PositiveIntegerField(default=0, editable=False)
+    last_verification_at = models.DateTimeField(blank=True, null=True, editable=False)
+
+    cleanup_claim_token = models.UUIDField(blank=True, null=True, editable=False)
+    cleanup_claimed_at = models.DateTimeField(blank=True, null=True, editable=False)
+    cleanup_lease_until = models.DateTimeField(blank=True, null=True, editable=False)
+    cleanup_attempts = models.PositiveIntegerField(default=0, editable=False)
+    cleanup_last_attempt_at = models.DateTimeField(blank=True, null=True, editable=False)
+    cleanup_next_attempt_at = models.DateTimeField(blank=True, null=True, editable=False)
+    cleanup_error_code = models.CharField(max_length=64, blank=True, default="", editable=False)
+
+    upload_cleanup_pending = models.BooleanField(default=False, editable=False)
+    upload_cleanup_attempts = models.PositiveIntegerField(default=0, editable=False)
+    upload_cleanup_last_attempt_at = models.DateTimeField(blank=True, null=True, editable=False)
+    upload_cleanup_next_attempt_at = models.DateTimeField(blank=True, null=True, editable=False)
+    upload_cleanup_error_code = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    absolute_expires_at = models.DateTimeField(editable=False)
+    issued_at = models.DateTimeField(blank=True, null=True, editable=False)
+    presign_expires_at = models.DateTimeField(blank=True, null=True, editable=False)
+    verified_at = models.DateTimeField(blank=True, null=True, editable=False)
+    attached_at = models.DateTimeField(blank=True, null=True, editable=False)
+    deleted_at = models.DateTimeField(blank=True, null=True, editable=False)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(state__in=[
+                    "created", "issued", "verified", "attached", "failed",
+                    "expired", "cleanup_pending", "deleted",
+                ]),
+                name="media_intent_valid_state",
+            ),
+            models.CheckConstraint(
+                check=models.Q(slot__gte=0, slot__lt=3),
+                name="media_intent_slot_range",
+            ),
+            models.CheckConstraint(
+                check=models.Q(declared_byte_size__gt=0, declared_byte_size__lte=5_000_000),
+                name="media_intent_declared_size_range",
+            ),
+            models.CheckConstraint(
+                check=models.Q(expected_mime__in=["image/jpeg", "image/png", "image/webp"]),
+                name="media_intent_expected_mime_allowed",
+            ),
+            models.CheckConstraint(
+                check=models.Q(declared_sha256__regex=r"^[0-9a-f]{64}$"),
+                name="media_intent_declared_sha256_format",
+            ),
+            models.CheckConstraint(
+                check=models.Q(object_key__regex=r"^submission-media/[0-9]+/[0-9a-f]{32}$"),
+                name="media_intent_managed_key_namespace",
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    sealed_object_key__regex=(
+                        r"^submission-media-sealed/[0-9]+/[0-9a-f]{32}$"
+                    )
+                ),
+                name="media_intent_sealed_key_namespace",
+            ),
+            models.CheckConstraint(
+                check=~models.Q(sealed_object_key=F("object_key")),
+                name="media_intent_upload_sealed_keys_distinct",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        cleanup_claim_token__isnull=True,
+                        cleanup_claimed_at__isnull=True,
+                        cleanup_lease_until__isnull=True,
+                    )
+                    | models.Q(
+                        cleanup_claim_token__isnull=False,
+                        cleanup_claimed_at__isnull=False,
+                        cleanup_lease_until__isnull=False,
+                        state="cleanup_pending",
+                    )
+                ),
+                name="media_intent_cleanup_lease_complete",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(state__in=["issued", "verified", "attached"])
+                    | models.Q(issued_at__isnull=False, presign_expires_at__isnull=False)
+                ),
+                name="media_intent_issued_metadata_complete",
+            ),
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(state__in=["verified", "attached"])
+                    | models.Q(
+                        server_byte_size__gt=0,
+                        server_byte_size__lte=5_000_000,
+                        server_sha256__regex=r"^[0-9a-f]{64}$",
+                        detected_mime__in=["image/jpeg", "image/png", "image/webp"],
+                        width__gt=0,
+                        width__lte=10_000,
+                        height__gt=0,
+                        height__lte=10_000,
+                        verified_at__isnull=False,
+                    )
+                ),
+                name="media_intent_verified_metadata_complete",
+            ),
+            models.CheckConstraint(
+                check=(~models.Q(state="attached") | models.Q(attached_at__isnull=False)),
+                name="media_intent_attached_timestamp_complete",
+            ),
+            models.CheckConstraint(
+                check=(~models.Q(state="deleted") | models.Q(deleted_at__isnull=False)),
+                name="media_intent_deleted_timestamp_complete",
+            ),
+            models.UniqueConstraint(
+                fields=("submission", "slot"),
+                condition=models.Q(state__in=["created", "issued", "verified"]),
+                name="unique_reserving_media_intent_slot",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            immutable = (
+                "submission_id",
+                "owner_id",
+                "slot",
+                "storage_identifier",
+                "storage_bucket",
+                "object_key",
+                "sealed_object_key",
+                "expected_mime",
+                "declared_byte_size",
+                "declared_sha256",
+                "absolute_expires_at",
+            )
+            issued = type(self).objects.filter(pk=self.pk).values(*immutable).first()
+            if issued is not None:
+                changed = [field for field in immutable if getattr(self, field) != issued[field]]
+                if changed:
+                    raise ValidationError(
+                        {field: "Issued media binding fields are immutable." for field in changed}
+                    )
+        return super().save(*args, **kwargs)
 
 
 class SubmissionIdempotency(models.Model):
@@ -252,6 +462,13 @@ class SubmissionIdempotency(models.Model):
         on_delete=models.CASCADE,
         related_name="idempotency_records",
     )
+    media_intent = models.ForeignKey(
+        MediaUploadIntent,
+        blank=True,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="idempotency_records",
+    )
     original_result = models.JSONField(editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -264,6 +481,34 @@ class SubmissionIdempotency(models.Model):
             models.CheckConstraint(
                 check=~models.Q(key=""),
                 name="submission_idempotency_key_not_empty",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        operation__in=[
+                            SubmissionOperation.MEDIA_CREATE,
+                            SubmissionOperation.MEDIA_ISSUE,
+                            SubmissionOperation.MEDIA_RENEW,
+                            SubmissionOperation.MEDIA_VERIFY,
+                            SubmissionOperation.MEDIA_ATTACH,
+                            SubmissionOperation.MEDIA_EXPIRE,
+                            SubmissionOperation.MEDIA_CLEANUP,
+                        ],
+                        media_intent__isnull=False,
+                    )
+                    | models.Q(
+                        operation__in=[
+                            SubmissionOperation.CREATE,
+                            SubmissionOperation.FINALIZE,
+                            SubmissionOperation.EXPIRE,
+                            SubmissionOperation.WITHDRAW,
+                            SubmissionOperation.APPROVE,
+                            SubmissionOperation.REJECT,
+                        ],
+                        media_intent__isnull=True,
+                    )
+                ),
+                name="submission_idempotency_target_matches_operation",
             ),
         ]
 
@@ -423,8 +668,82 @@ class Image(models.Model):
     metadata = models.JSONField(blank=True, null=True)
     request = models.ForeignKey(Request, on_delete=models.DO_NOTHING, null=True)
     place = models.ForeignKey(Place, on_delete=models.DO_NOTHING, null=True)
+    is_managed = models.BooleanField(default=False, editable=False)
+    intent = models.OneToOneField(
+        MediaUploadIntent,
+        blank=True,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="attachment",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="managed_images",
+    )
+    position = models.PositiveSmallIntegerField(blank=True, null=True)
+    state = models.CharField(max_length=16, blank=True, default="")
+    storage_identifier = models.CharField(max_length=64, blank=True, default="", editable=False)
+    storage_bucket = models.CharField(max_length=255, blank=True, default="", editable=False)
+    storage_key = models.CharField(max_length=255, blank=True, default="", editable=False)
+    byte_size = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    detected_mime = models.CharField(max_length=32, blank=True, default="", editable=False)
+    width = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    sha256 = models.CharField(max_length=64, blank=True, default="", editable=False)
+    attached_at = models.DateTimeField(blank=True, null=True, editable=False)
     class Meta:
         verbose_name_plural = 'Images'
+        constraints = [
+            models.UniqueConstraint(
+                fields=("request", "position"),
+                condition=models.Q(is_managed=True, state="attached"),
+                name="unique_managed_image_position",
+            ),
+            models.UniqueConstraint(
+                fields=("request", "sha256"),
+                condition=models.Q(is_managed=True, state="attached"),
+                name="unique_managed_image_digest",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(is_managed=False)
+                    | models.Q(
+                        is_managed=True,
+                        state="attached",
+                        request__isnull=False,
+                        place__isnull=True,
+                        intent__isnull=False,
+                        owner__isnull=False,
+                        position__gte=0,
+                        position__lt=3,
+                        byte_size__gt=0,
+                        byte_size__lte=5_000_000,
+                        detected_mime__in=["image/jpeg", "image/png", "image/webp"],
+                        storage_identifier__regex=r"^.+$",
+                        storage_bucket__regex=r"^.+$",
+                        storage_key__regex=(
+                            r"^submission-media-sealed/[0-9]+/[0-9a-f]{32}$"
+                        ),
+                        sha256__regex=r"^[0-9a-f]{64}$",
+                        width__gt=0,
+                        width__lte=10_000,
+                        height__gt=0,
+                        height__lte=10_000,
+                    )
+                ),
+                name="managed_image_complete_metadata",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(is_managed=False)
+                    | LessThanOrEqual(F("width") * F("height"), Value(25_000_000))
+                ),
+                name="managed_image_area_limit",
+            ),
+        ]
 
     def __str__(self):
         return self.url

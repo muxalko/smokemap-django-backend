@@ -8,6 +8,7 @@ from .models import (
     CustomUser,
     Image,
     Location,
+    MediaUploadIntent,
     ModerationAudit,
     Place,
     Request,
@@ -33,6 +34,17 @@ from .submissions import (
     SubmissionInputError,
     create_submission,
 )
+from .media import (
+    MediaInputError,
+    MediaStateConflict,
+    attach_verified_media,
+    cleanup_media_object,
+    create_upload_intent,
+    expire_upload_intent,
+    issue_upload,
+    verify_upload,
+)
+from .media_storage import StorageOperationError
 from .tokens import (
     INVALID_TOKEN,
     TokenLifecycleError,
@@ -87,6 +99,74 @@ class ImageType(DjangoObjectType):
         model = Image
         fields = ('id', 'name', 'url', 'metadata')
 
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        return queryset.filter(place__isnull=False, is_managed=False)
+
+
+class MediaUploadIntentType(DjangoObjectType):
+    submission_id = graphene.ID(required=True)
+    state = graphene.String(required=True)
+
+    class Meta:
+        model = MediaUploadIntent
+        fields = (
+            "id",
+            "submission_id",
+            "state",
+            "slot",
+            "expected_mime",
+            "declared_byte_size",
+            "absolute_expires_at",
+            "presign_expires_at",
+            "server_byte_size",
+            "detected_mime",
+            "width",
+            "height",
+            "failure_code",
+            "verification_attempts",
+            "cleanup_attempts",
+            "cleanup_next_attempt_at",
+            "created_at",
+            "verified_at",
+            "attached_at",
+            "deleted_at",
+        )
+
+    def resolve_submission_id(self, info):
+        return str(self.submission_id)
+
+    def resolve_state(self, info):
+        return self.state.value if hasattr(self.state, "value") else str(self.state)
+
+
+class ManagedMediaAttachmentType(DjangoObjectType):
+    submission_id = graphene.ID(required=True)
+
+    class Meta:
+        model = Image
+        skip_registry = True
+        fields = (
+            "id",
+            "submission_id",
+            "position",
+            "state",
+            "byte_size",
+            "detected_mime",
+            "width",
+            "height",
+            "attached_at",
+        )
+
+    def resolve_submission_id(self, info):
+        return str(self.request_id)
+
+
+class MediaUploadAuthorization(graphene.ObjectType):
+    url = graphene.String(required=True)
+    fields = GenericScalar(required=True)
+    expires_at = graphene.DateTime(required=True)
+
 class AddressType(graphql_geojson.GeoJSONType):
     class Meta:
         model = Address
@@ -133,7 +213,6 @@ class RequestType(DjangoObjectType):
             'tags',
             'website',
             'address',
-            'image_set',
             'date_created',
             'date_updated',
             'date_approved',
@@ -241,7 +320,7 @@ class Query(graphene.ObjectType):
         return Address.objects.filter(place__isnull=False).distinct()
     
     def resolve_images(root, info):
-        return Image.objects.filter(place__isnull=False)
+        return Image.objects.filter(place__isnull=False, is_managed=False)
     
     # def resolve_images_by_set_id(root, info, set_id):
     #     # Querying a list
@@ -475,6 +554,204 @@ class CreateImage(graphene.Mutation):
         )
 
 
+def _raise_media_graphql_error(error):
+    if isinstance(error, MediaInputError):
+        raise GraphQLError(
+            str(error),
+            extensions={"code": error.code, "field": error.field},
+        ) from error
+    if isinstance(error, IdempotencyConflict):
+        raise GraphQLError(
+            str(error),
+            extensions={"code": "IDEMPOTENCY_CONFLICT"},
+        ) from error
+    if isinstance(error, MediaStateConflict):
+        raise GraphQLError(str(error), extensions={"code": error.code}) from error
+    if isinstance(error, StorageOperationError):
+        raise GraphQLError(
+            "Private media storage is temporarily unavailable",
+            extensions={"code": "MEDIA_STORAGE_UNAVAILABLE"},
+        ) from error
+    raise error
+
+
+class CreateMediaUploadIntentInput(graphene.InputObjectType):
+    submission_id = graphene.ID(required=True)
+    mime_type = graphene.String(required=True)
+    declared_byte_size = graphene.Int(required=True)
+    declared_sha256 = graphene.String(required=True)
+    original_filename = graphene.String()
+    slot = graphene.Int()
+
+
+class CreateMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        idempotency_key = graphene.String(required=True)
+        input = CreateMediaUploadIntentInput(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, idempotency_key, input):
+        actor = require_active_user(info)
+        try:
+            intent, replayed = create_upload_intent(
+                actor,
+                input.submission_id,
+                idempotency_key,
+                mime_type=input.mime_type,
+                declared_byte_size=input.declared_byte_size,
+                declared_sha256=input.declared_sha256,
+                original_filename=getattr(input, "original_filename", "") or "",
+                slot=getattr(input, "slot", None),
+            )
+        except (
+            MediaInputError,
+            MediaStateConflict,
+            IdempotencyConflict,
+            StorageOperationError,
+        ) as error:
+            _raise_media_graphql_error(error)
+        return cls(intent=intent, replayed=replayed)
+
+
+class IssueMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    upload = graphene.Field(MediaUploadAuthorization, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, upload, replayed = issue_upload(
+                actor, intent_id, idempotency_key, renew=False
+            )
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict, StorageOperationError) as error:
+            _raise_media_graphql_error(error)
+        return cls(
+            intent=intent,
+            upload=MediaUploadAuthorization(
+                url=upload["url"],
+                fields=upload["fields"],
+                expires_at=upload["expires_at"],
+            ),
+            replayed=replayed,
+        )
+
+
+class RenewMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    upload = graphene.Field(MediaUploadAuthorization, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, upload, replayed = issue_upload(
+                actor, intent_id, idempotency_key, renew=True
+            )
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict, StorageOperationError) as error:
+            _raise_media_graphql_error(error)
+        return cls(
+            intent=intent,
+            upload=MediaUploadAuthorization(
+                url=upload["url"],
+                fields=upload["fields"],
+                expires_at=upload["expires_at"],
+            ),
+            replayed=replayed,
+        )
+
+
+class VerifyMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, replayed = verify_upload(actor, intent_id, idempotency_key)
+        except (
+            MediaInputError,
+            MediaStateConflict,
+            IdempotencyConflict,
+            StorageOperationError,
+        ) as error:
+            _raise_media_graphql_error(error)
+        return cls(intent=intent, replayed=replayed)
+
+
+class AttachVerifiedMedia(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    attachment = graphene.Field(ManagedMediaAttachmentType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            attachment, replayed = attach_verified_media(actor, intent_id, idempotency_key)
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict) as error:
+            _raise_media_graphql_error(error)
+        return cls(attachment=attachment, replayed=replayed)
+
+
+class ExpireMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, replayed = expire_upload_intent(actor, intent_id, idempotency_key)
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict) as error:
+            _raise_media_graphql_error(error)
+        return cls(intent=intent, replayed=replayed)
+
+
+class CleanupMediaUploadIntent(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    deleted = graphene.Boolean(required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, deleted, replayed = cleanup_media_object(actor, intent_id, idempotency_key)
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict, StorageOperationError) as error:
+            _raise_media_graphql_error(error)
+        return cls(intent=intent, deleted=deleted, replayed=replayed)
+
+
 class ObtainJSONWebToken(graphene.Mutation):
     payload = GenericScalar(required=True)
     token = graphene.String(required=True)
@@ -563,6 +840,13 @@ class Mutation(graphene.ObjectType):
     revoke_token = Revoke.Field()
     create_request = CreateRequest.Field()
     create_submission_v3 = CreateSubmissionV3.Field()
+    create_media_upload_intent = CreateMediaUploadIntent.Field()
+    issue_media_upload_intent = IssueMediaUploadIntent.Field()
+    renew_media_upload_intent = RenewMediaUploadIntent.Field()
+    verify_media_upload_intent = VerifyMediaUploadIntent.Field()
+    attach_verified_media = AttachVerifiedMedia.Field()
+    expire_media_upload_intent = ExpireMediaUploadIntent.Field()
+    cleanup_media_upload_intent = CleanupMediaUploadIntent.Field()
     create_image = CreateImage.Field()
     approve_request = ApproveRequest.Field()
     delete_request = DeleteRequest.Field()

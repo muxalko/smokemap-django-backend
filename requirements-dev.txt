@@ -32,6 +32,7 @@ mdurl==0.1.2
 multidict==6.0.5
 oauthlib==3.2.2
 packaging==23.1
+Pillow==10.4.0
 pkg_resources==0.0.0
 promise==2.3
 psycopg2-binary==2.9.7
