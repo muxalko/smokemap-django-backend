@@ -41,28 +41,42 @@ def _is_not_found(error):
 class S3MediaStorage:
     """Narrow private-object boundary. Callers always supply an exact bucket/key."""
 
-    def __init__(self, client=None):
-        if client is not None:
-            self.client = client
-            return
+    def __init__(self, client=None, upload_client=None):
         try:
-            self.client = boto3.client(
-                "s3",
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                region_name=settings.AWS_S3_REGION_NAME or None,
-                endpoint_url=settings.AWS_S3_ENDPOINT_URL or None,
-                config=Config(
-                    signature_version="s3v4",
-                    s3={"addressing_style": settings.AWS_S3_ADDRESSING_STYLE},
-                ),
+            self.client = (
+                client
+                if client is not None
+                else self._build_client(settings.MEDIA_STORAGE_INTERNAL_ENDPOINT_URL)
+            )
+            self.upload_client = (
+                upload_client
+                if upload_client is not None
+                else (
+                    self.client
+                    if client is not None
+                    else self._build_client(settings.MEDIA_UPLOAD_ENDPOINT_URL)
+                )
             )
         except (BotoCoreError, ValueError, TypeError) as error:
             raise StorageOperationError("private media storage could not be configured") from error
 
+    @staticmethod
+    def _build_client(endpoint_url):
+        return boto3.client(
+            "s3",
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_S3_REGION_NAME or None,
+            endpoint_url=endpoint_url or None,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": settings.AWS_S3_ADDRESSING_STYLE},
+            ),
+        )
+
     def issue_upload(self, *, bucket, key, mime_type, maximum_size, expires_in):
         try:
-            return self.client.generate_presigned_post(
+            return self.upload_client.generate_presigned_post(
                 Bucket=bucket,
                 Key=key,
                 Fields={"Content-Type": mime_type},
