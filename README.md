@@ -51,11 +51,12 @@ spool. The sealed key is never returned or presigned and is the only key an
 attached managed image may reference.
 
 Deployments must schedule `python manage.py process_media_cleanup` periodically.
-The command expires abandoned intents, retries exact-key object deletion,
-removes stale client-upload objects after verified bytes have been sealed, and
-redacts expired upload authorizations from idempotency evidence. This repository
-does not prescribe a scheduler; use the deployment platform's periodic-job
-facility and monitor command failures.
+The command first expires drafts after 30 days of relevant inactivity, then
+expires abandoned intents, retries exact-key object deletion, removes stale
+client-upload objects after verified bytes have been sealed, and redacts expired
+upload authorizations from idempotency evidence. This repository does not
+prescribe a scheduler; use the deployment platform's periodic-job facility and
+monitor command failures.
 
 Draft request media is intentionally absent from generic `Request.imageSet` and
 public `Place.imageSet` relations. Authorized clients receive M3 private request

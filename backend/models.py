@@ -170,6 +170,12 @@ class Request(models.Model):
 
     class Meta:
         ordering = ['-date_created']
+        indexes = [
+            models.Index(
+                fields=["state", "date_updated", "id"],
+                name="request_expiry_scan_idx",
+            ),
+        ]
         constraints = [
             models.CheckConstraint(
                 check=models.Q(
@@ -484,6 +490,10 @@ class SubmissionIdempotency(models.Model):
                 name="submission_idempotency_key_not_empty",
             ),
             models.CheckConstraint(
+                check=~models.Q(operation=SubmissionOperation.EXPIRE),
+                name="submission_idempotency_not_system_expiry",
+            ),
+            models.CheckConstraint(
                 check=(
                     models.Q(
                         operation__in=[
@@ -515,7 +525,12 @@ class SubmissionIdempotency(models.Model):
         ]
 
 
+SYSTEM_DRAFT_EXPIRY_ACTOR = "draft-expiry.v3"
+
+
 class SubmissionLifecycleEvent(models.Model):
+    DRAFT_EXPIRY_SYSTEM_ACTOR = SYSTEM_DRAFT_EXPIRY_ACTOR
+
     class Outcome(models.TextChoices):
         SUCCEEDED = "succeeded", "Succeeded"
 
@@ -526,9 +541,12 @@ class SubmissionLifecycleEvent(models.Model):
     )
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        blank=True,
+        null=True,
         on_delete=models.PROTECT,
         related_name="submission_lifecycle_events",
     )
+    system_actor = models.CharField(blank=True, null=True, max_length=64)
     operation = models.CharField(max_length=32, choices=SubmissionOperation.choices)
     from_state = models.CharField(
         blank=True,
@@ -540,6 +558,8 @@ class SubmissionLifecycleEvent(models.Model):
     outcome = models.CharField(max_length=16, choices=Outcome.choices)
     idempotency = models.OneToOneField(
         SubmissionIdempotency,
+        blank=True,
+        null=True,
         on_delete=models.CASCADE,
         related_name="lifecycle_event",
     )
@@ -590,6 +610,34 @@ class SubmissionLifecycleEvent(models.Model):
                     )
                 ),
                 name="submission_event_valid_transition",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        operation=SubmissionOperation.EXPIRE,
+                        actor__isnull=True,
+                        system_actor=SYSTEM_DRAFT_EXPIRY_ACTOR,
+                        idempotency__isnull=True,
+                        outcome="succeeded",
+                    )
+                    | (
+                        ~models.Q(operation=SubmissionOperation.EXPIRE)
+                        & models.Q(
+                            actor__isnull=False,
+                            system_actor__isnull=True,
+                            idempotency__isnull=False,
+                        )
+                    )
+                ),
+                name="submission_event_actor_evidence",
+            ),
+            models.UniqueConstraint(
+                fields=("submission",),
+                condition=models.Q(
+                    operation=SubmissionOperation.EXPIRE,
+                    outcome="succeeded",
+                ),
+                name="unique_successful_submission_expiry",
             ),
         ]
 

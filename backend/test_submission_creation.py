@@ -391,70 +391,66 @@ class SubmissionCreationTests(TestCase):
         submission = Request.objects.get(
             pk=created["data"]["createSubmissionV3"]["submission"]["id"]
         )
-        idempotency = SubmissionIdempotency.objects.create(
-            actor=self.user,
-            operation=SubmissionOperation.EXPIRE,
-            key="pending-expiry-event",
-            request_hash="0" * 64,
-            submission=submission,
-            original_result={"state": Request.State.EXPIRED},
-        )
 
         with self.assertRaises(IntegrityError), transaction.atomic():
             SubmissionLifecycleEvent.objects.create(
                 submission=submission,
-                actor=self.user,
+                actor=None,
+                system_actor=SubmissionLifecycleEvent.DRAFT_EXPIRY_SYSTEM_ACTOR,
                 operation=SubmissionOperation.EXPIRE,
                 from_state=Request.State.PENDING,
                 to_state=Request.State.EXPIRED,
                 outcome=SubmissionLifecycleEvent.Outcome.SUCCEEDED,
-                idempotency=idempotency,
+                idempotency=None,
             )
 
-    def test_repeated_submission_operation_uses_actor_scoped_idempotency(self):
+    def test_system_expiry_has_no_actor_idempotency_and_is_unique(self):
         created = self.create(key="repeated-operation-setup", tags=[])
         submission = Request.objects.get(
             pk=created["data"]["createSubmissionV3"]["submission"]["id"]
         )
 
-        for key in ("expiry-attempt-one", "expiry-attempt-two"):
-            idempotency = SubmissionIdempotency.objects.create(
-                actor=self.user,
-                operation=SubmissionOperation.EXPIRE,
-                key=key,
-                request_hash="1" * 64,
-                submission=submission,
-                original_result={"state": Request.State.EXPIRED},
-            )
+        event = SubmissionLifecycleEvent.objects.create(
+            submission=submission,
+            actor=None,
+            system_actor=SubmissionLifecycleEvent.DRAFT_EXPIRY_SYSTEM_ACTOR,
+            operation=SubmissionOperation.EXPIRE,
+            from_state=Request.State.DRAFT,
+            to_state=Request.State.EXPIRED,
+            outcome=SubmissionLifecycleEvent.Outcome.SUCCEEDED,
+            idempotency=None,
+        )
+        self.assertIsNone(event.actor_id)
+        self.assertIsNone(event.idempotency_id)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
             SubmissionLifecycleEvent.objects.create(
                 submission=submission,
-                actor=self.user,
+                actor=None,
+                system_actor=SubmissionLifecycleEvent.DRAFT_EXPIRY_SYSTEM_ACTOR,
                 operation=SubmissionOperation.EXPIRE,
                 from_state=Request.State.DRAFT,
                 to_state=Request.State.EXPIRED,
                 outcome=SubmissionLifecycleEvent.Outcome.SUCCEEDED,
-                idempotency=idempotency,
+                idempotency=None,
             )
 
         self.assertEqual(
-            SubmissionIdempotency.objects.filter(
-                submission=submission,
-                operation=SubmissionOperation.EXPIRE,
-            ).count(),
-            2,
+            SubmissionIdempotency.objects.filter(operation=SubmissionOperation.EXPIRE).count(),
+            0,
         )
         self.assertEqual(
             SubmissionLifecycleEvent.objects.filter(
                 submission=submission,
                 operation=SubmissionOperation.EXPIRE,
             ).count(),
-            2,
+            1,
         )
         with self.assertRaises(IntegrityError), transaction.atomic():
             SubmissionIdempotency.objects.create(
                 actor=self.user,
                 operation=SubmissionOperation.EXPIRE,
-                key="expiry-attempt-one",
+                key="fake-owner-expiry",
                 request_hash="2" * 64,
                 submission=submission,
                 original_result={"state": Request.State.EXPIRED},
