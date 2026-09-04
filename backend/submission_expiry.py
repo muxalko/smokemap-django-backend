@@ -29,8 +29,10 @@ RELEVANT_OWNER_OPERATIONS = (
     SubmissionOperation.MEDIA_RENEW,
     SubmissionOperation.MEDIA_VERIFY,
     SubmissionOperation.MEDIA_ATTACH,
+    SubmissionOperation.MEDIA_REMOVE,
     SubmissionOperation.MEDIA_EXPIRE,
     SubmissionOperation.MEDIA_CLEANUP,
+    SubmissionOperation.REORDER_MEDIA,
 )
 
 # ``failure_at`` is deliberately absent: both owner requests and autonomous
