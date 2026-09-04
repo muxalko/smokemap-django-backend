@@ -39,6 +39,8 @@ MAX_IMAGE_EDGE = 10_000
 MAX_IMAGE_AREA = 25_000_000
 INTENT_LIFETIME = timedelta(hours=24)
 PRESIGN_LIFETIME_SECONDS = 600
+# The M3 media policy bounds a preview capability to at most 10 minutes.
+MEDIA_PREVIEW_LIFETIME_SECONDS = 600
 CLEANUP_LEASE = timedelta(minutes=5)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORMAT_MIME = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
@@ -505,6 +507,53 @@ def issue_upload(actor, intent_id, idempotency_key, *, renew=False, storage=None
             expired_code,
         )
     return intent, authorization, False
+
+
+def issue_media_preview(actor, attachment_id, *, storage=None):
+    """Fail-closed, exact-object GET authorization for one attached managed image.
+
+    Only the verified sealed object bound to an ``is_managed`` ``attached``
+    image can be previewed: that state is reached exclusively through
+    ``attach_verified_media``, so it already carries the invariants
+    ``managed_image_complete_metadata`` enforces (owner, sealed storage key,
+    verified dimensions/digest). The owner may preview their own draft or
+    pending submission's media; a moderator/administrator may preview a
+    pending submission's media regardless of owner. Every other outcome -
+    missing attachment, wrong state, unmoderated cross-owner access, a
+    moderator viewing someone else's draft - collapses to the same NOT_FOUND
+    so existence cannot be distinguished from denial.
+    """
+    if not getattr(actor, "is_authenticated", False) or not getattr(actor, "is_active", False):
+        raise MediaStateConflict("active authentication is required", "UNAUTHENTICATED")
+    try:
+        image = (
+            Image.objects.select_related("request")
+            .get(pk=attachment_id, is_managed=True, state="attached")
+        )
+    except (Image.DoesNotExist, ValidationError, ValueError, TypeError, OverflowError) as error:
+        raise MediaStateConflict("media attachment not found", "NOT_FOUND") from error
+
+    submission = image.request
+    is_reviewer = bool(
+        getattr(actor, "is_staff", False) or getattr(actor, "is_superuser", False)
+    )
+    if submission is not None and submission.owner_id == actor.pk:
+        allowed = submission.state in (Request.State.DRAFT, Request.State.PENDING)
+    elif submission is not None and is_reviewer:
+        allowed = submission.state == Request.State.PENDING
+    else:
+        allowed = False
+    if not allowed:
+        raise MediaStateConflict("media attachment not found", "NOT_FOUND")
+
+    signer = storage or configured_media_storage()
+    expires_in = MEDIA_PREVIEW_LIFETIME_SECONDS
+    url = signer.issue_preview(
+        bucket=image.storage_bucket, key=image.storage_key, expires_in=expires_in
+    )
+    if not isinstance(url, str) or not url:
+        raise StorageOperationError("preview authorization response was invalid")
+    return image, url, timezone.now() + timedelta(seconds=expires_in)
 
 
 def _signature_mime(header):

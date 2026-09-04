@@ -47,6 +47,7 @@ from .media import (
     cleanup_media_object,
     create_upload_intent,
     expire_upload_intent,
+    issue_media_preview,
     issue_upload,
     remove_attached_media,
     verify_upload,
@@ -178,6 +179,13 @@ class MediaUploadAuthorization(graphene.ObjectType):
     fields = GenericScalar(required=True)
     expires_at = graphene.DateTime(required=True)
 
+
+class MediaPreviewAuthorization(graphene.ObjectType):
+    """A short-lived, exact-object GET capability. Never a bucket, key, or credential."""
+
+    url = graphene.String(required=True)
+    expires_at = graphene.DateTime(required=True)
+
 class AddressType(graphql_geojson.GeoJSONType):
     class Meta:
         model = Address
@@ -293,6 +301,11 @@ class Query(graphene.ObjectType):
         submission_id=graphene.ID(required=True),
     )
 
+    media_attachment_preview_v3 = graphene.Field(
+        MediaPreviewAuthorization,
+        attachment_id=graphene.ID(required=True),
+    )
+
     places = graphene.List(PlaceType)
 
     places_names = graphene.List(graphene.String)
@@ -395,6 +408,14 @@ class Query(graphene.ObjectType):
             return submission_media_state(actor, submission_id)
         except Exception as error:
             _raise_submission_graphql_error(error, "SUBMISSION_MEDIA_STATE_FAILED")
+
+    def resolve_media_attachment_preview_v3(root, info, attachment_id):
+        actor = require_active_user(info)
+        try:
+            _image, url, expires_at = issue_media_preview(actor, attachment_id)
+        except (MediaStateConflict, StorageOperationError) as error:
+            _raise_media_graphql_error(error)
+        return MediaPreviewAuthorization(url=url, expires_at=expires_at)
 
     def resolve_places(root, info):
         # Querying a list

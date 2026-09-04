@@ -47,8 +47,26 @@ If Compose publishes a different host port, use that published port in
 Each intent records separate immutable keys: the compatibility `object_key`
 field is the client-presigned upload target, while `sealed_object_key` is a
 backend-only destination for the exact bytes verified from the bounded local
-spool. The sealed key is never returned or presigned and is the only key an
+spool. The sealed key is never returned directly and is the only key an
 attached managed image may reference.
+
+### Private media preview
+
+The `mediaAttachmentPreviewV3` GraphQL query issues a short-lived (at most 10
+minutes), exact-object presigned GET for one verified, sealed, attached
+managed image. It never returns a bucket, key, credential, checksum, upload
+form, or permanent/public URL - only a `url` and its `expiresAt`. It is signed
+with the same browser-reachable `MEDIA_UPLOAD_ENDPOINT_URL` client used for
+upload presigning, so the local MinIO wiring above covers it without changing
+any bucket ACL.
+
+Authorization is fail-closed and state-scoped: the active owner may preview
+their own `draft` or `pending` attachment, and a moderator/administrator may
+preview a `pending` attachment under the existing M1 review permission
+(never another owner's `draft`). Every other case - guest, inactive, another
+owner, a terminal submission state, or an attachment that is not a verified
+sealed managed image - returns the same stable `NOT_FOUND`/`UNAUTHENTICATED`
+outcome so existence is never distinguishable from denial.
 
 Deployments must schedule `python manage.py process_media_cleanup` periodically.
 The command first expires drafts after 30 days of relevant inactivity, then
