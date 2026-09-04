@@ -90,6 +90,16 @@ class S3MediaStorage:
         except (BotoCoreError, ClientError, ValueError) as error:
             raise StorageOperationError("upload authorization could not be issued") from error
 
+    def issue_preview(self, *, bucket, key, expires_in):
+        try:
+            return self.upload_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=expires_in,
+            )
+        except (BotoCoreError, ClientError, ValueError) as error:
+            raise StorageOperationError("preview authorization could not be issued") from error
+
     def open_object(self, *, bucket, key):
         try:
             response = self.client.get_object(Bucket=bucket, Key=key)
