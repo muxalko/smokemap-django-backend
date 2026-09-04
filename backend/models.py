@@ -252,8 +252,10 @@ class SubmissionOperation(models.TextChoices):
     MEDIA_RENEW = "media.intent.renew.v3", "Renew media upload"
     MEDIA_VERIFY = "media.intent.verify.v3", "Verify media upload"
     MEDIA_ATTACH = "media.intent.attach.v3", "Attach verified media"
+    MEDIA_REMOVE = "media.intent.remove.v3", "Remove attached media"
     MEDIA_EXPIRE = "media.intent.expire.v3", "Expire media intent"
     MEDIA_CLEANUP = "media.intent.cleanup.v3", "Clean up media object"
+    REORDER_MEDIA = "submission.reorder_media.v3", "Reorder submission media"
 
 
 class MediaUploadIntent(models.Model):
@@ -502,6 +504,7 @@ class SubmissionIdempotency(models.Model):
                             SubmissionOperation.MEDIA_RENEW,
                             SubmissionOperation.MEDIA_VERIFY,
                             SubmissionOperation.MEDIA_ATTACH,
+                            SubmissionOperation.MEDIA_REMOVE,
                             SubmissionOperation.MEDIA_EXPIRE,
                             SubmissionOperation.MEDIA_CLEANUP,
                         ],
@@ -516,6 +519,7 @@ class SubmissionIdempotency(models.Model):
                             SubmissionOperation.WITHDRAW,
                             SubmissionOperation.APPROVE,
                             SubmissionOperation.REJECT,
+                            SubmissionOperation.REORDER_MEDIA,
                         ],
                         media_intent__isnull=True,
                     )
@@ -755,9 +759,17 @@ class Image(models.Model):
     class Meta:
         verbose_name_plural = 'Images'
         constraints = [
+            # Not partial: a deferrable constraint cannot be built on a partial
+            # index, and reorder must permute all retained positions in one
+            # transaction (e.g. a 3-way rotation has no free slot to stage
+            # through). Deferring to commit is standard SQL for that swap and
+            # does not widen what states are reachable: the companion
+            # ``unmanaged_image_position_null`` check keeps every non-managed
+            # row's position NULL, which never collides under this constraint,
+            # so the enforced scope is exactly the former managed+attached set.
             models.UniqueConstraint(
                 fields=("request", "position"),
-                condition=models.Q(is_managed=True, state="attached"),
+                deferrable=models.Deferrable.DEFERRED,
                 name="unique_managed_image_position",
             ),
             models.UniqueConstraint(
@@ -800,6 +812,13 @@ class Image(models.Model):
                     | LessThanOrEqual(F("width") * F("height"), Value(25_000_000))
                 ),
                 name="managed_image_area_limit",
+            ),
+            # Makes the non-partial ``unique_managed_image_position`` above
+            # provably equivalent to the managed+attached scope it replaced:
+            # only a managed row may claim a position at all.
+            models.CheckConstraint(
+                check=(models.Q(is_managed=True) | models.Q(position__isnull=True)),
+                name="unmanaged_image_position_null",
             ),
         ]
 

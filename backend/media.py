@@ -1056,6 +1056,44 @@ def attach_verified_media(actor, intent_id, idempotency_key):
     return image, replayed
 
 
+def remove_attached_media(actor, intent_id, idempotency_key):
+    """Draft-only idempotent removal of one attached managed image.
+
+    Locks submission, then intent, then attachment (the same canonical order
+    finalize/attach use), deletes the retained attachment, hands the exact
+    bound object off to ``cleanup_pending`` in the same transaction, and frees
+    the slot. Mirrors ``_expire_locked_intent``'s handoff shape exactly, since
+    an owner-removed attachment and an autonomously-expired one both retire
+    the intent's storage objects through the identical cleanup path.
+    """
+    key = _media_idempotency_key(idempotency_key)
+    operation = SubmissionOperation.MEDIA_REMOVE
+    request_hash = _canonical_hash({"intent_id": str(intent_id)})
+    with transaction.atomic():
+        submission, intent = _locked_parent_and_intent(actor, intent_id, require_draft=False)
+        existing = _idempotency_replay(actor, operation, key, request_hash)
+        if existing is not None:
+            return intent, True
+        if submission.state != Request.State.DRAFT:
+            raise MediaStateConflict("media can only be changed on a draft submission")
+        if intent.state != MediaUploadIntent.State.ATTACHED:
+            raise MediaStateConflict("only attached media can be removed")
+        image = Image.objects.select_for_update().filter(
+            intent=intent, is_managed=True, state="attached"
+        ).first()
+        if image is None:
+            raise MediaStateConflict("attached media evidence is incomplete")
+
+        now = timezone.now()
+        image.delete()
+        _expire_locked_intent(intent, now, failure_code="media_removed")
+        _record_idempotency(
+            actor=actor, operation=operation, key=key, request_hash=request_hash,
+            submission=submission, intent=intent, result=_result_for_intent(intent),
+        )
+        return intent, False
+
+
 def expire_upload_intent(actor, intent_id, idempotency_key):
     key = _media_idempotency_key(idempotency_key)
     operation = SubmissionOperation.MEDIA_EXPIRE

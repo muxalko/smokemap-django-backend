@@ -37,6 +37,8 @@ from .submissions import (
     create_submission,
     edit_submission,
     finalize_submission,
+    reorder_attached_media,
+    submission_media_state,
 )
 from .media import (
     MediaInputError,
@@ -46,6 +48,7 @@ from .media import (
     create_upload_intent,
     expire_upload_intent,
     issue_upload,
+    remove_attached_media,
     verify_upload,
 )
 from .media_storage import StorageOperationError
@@ -281,6 +284,11 @@ class Query(graphene.ObjectType):
         name=graphene.String()
     )
 
+    submission_media_state_v3 = graphene.Field(
+        lambda: SubmissionMediaStateType,
+        submission_id=graphene.ID(required=True),
+    )
+
     places = graphene.List(PlaceType)
 
     places_names = graphene.List(graphene.String)
@@ -377,6 +385,13 @@ class Query(graphene.ObjectType):
             requests = requests.filter(owner=user)
         return requests.first()
 
+    def resolve_submission_media_state_v3(root, info, submission_id):
+        actor = require_active_user(info)
+        try:
+            return submission_media_state(actor, submission_id)
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_MEDIA_STATE_FAILED")
+
     def resolve_places(root, info):
         # Querying a list
         return Place.objects.all()
@@ -456,6 +471,26 @@ class SubmissionV3SnapshotType(graphene.ObjectType):
     @staticmethod
     def resolve_tags(root: SubmissionSnapshot, info):
         return list(root.tags)
+
+
+class SubmissionMediaStateType(graphene.ObjectType):
+    """Owner-safe resume read model: no bucket, key, credential, or owner id."""
+
+    submission = graphene.Field(SubmissionV3SnapshotType, required=True)
+    attachments = graphene.List(
+        graphene.NonNull(ManagedMediaAttachmentType), required=True
+    )
+    media_intents = graphene.List(
+        graphene.NonNull(MediaUploadIntentType), required=True
+    )
+
+    @staticmethod
+    def resolve_attachments(root, info):
+        return list(root.attachments)
+
+    @staticmethod
+    def resolve_media_intents(root, info):
+        return list(root.media_intents)
 
 
 def _submission_v3_raw_input(input):
@@ -570,6 +605,27 @@ class FinalizeSubmissionV3(graphene.Mutation):
         except Exception as error:
             _raise_submission_graphql_error(error, "SUBMISSION_FINALIZE_FAILED")
         return cls(submission=submission, replayed=replayed)
+
+
+class ReorderSubmissionMediaV3(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+        attachment_ids = graphene.List(graphene.NonNull(graphene.ID), required=True)
+
+    ordered_attachment_ids = graphene.List(graphene.NonNull(graphene.ID), required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key, attachment_ids):
+        actor = require_active_user(info)
+        try:
+            ordered_ids, replayed = reorder_attached_media(
+                actor, submission_id, idempotency_key, attachment_ids
+            )
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_REORDER_MEDIA_FAILED")
+        return cls(ordered_attachment_ids=list(ordered_ids), replayed=replayed)
 
 
 class DeleteRequest(graphene.Mutation):
@@ -808,6 +864,24 @@ class AttachVerifiedMedia(graphene.Mutation):
         return cls(attachment=attachment, replayed=replayed)
 
 
+class RemoveAttachedMedia(graphene.Mutation):
+    class Arguments:
+        intent_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    intent = graphene.Field(MediaUploadIntentType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, intent_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            intent, replayed = remove_attached_media(actor, intent_id, idempotency_key)
+        except (MediaInputError, MediaStateConflict, IdempotencyConflict) as error:
+            _raise_media_graphql_error(error)
+        return cls(intent=intent, replayed=replayed)
+
+
 class ExpireMediaUploadIntent(graphene.Mutation):
     class Arguments:
         intent_id = graphene.ID(required=True)
@@ -935,11 +1009,13 @@ class Mutation(graphene.ObjectType):
     create_submission_v3 = CreateSubmissionV3.Field()
     edit_submission_v3 = EditSubmissionV3.Field()
     finalize_submission_v3 = FinalizeSubmissionV3.Field()
+    reorder_submission_media_v3 = ReorderSubmissionMediaV3.Field()
     create_media_upload_intent = CreateMediaUploadIntent.Field()
     issue_media_upload_intent = IssueMediaUploadIntent.Field()
     renew_media_upload_intent = RenewMediaUploadIntent.Field()
     verify_media_upload_intent = VerifyMediaUploadIntent.Field()
     attach_verified_media = AttachVerifiedMedia.Field()
+    remove_attached_media = RemoveAttachedMedia.Field()
     expire_media_upload_intent = ExpireMediaUploadIntent.Field()
     cleanup_media_upload_intent = CleanupMediaUploadIntent.Field()
     create_image = CreateImage.Field()

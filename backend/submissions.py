@@ -33,6 +33,11 @@ IDEMPOTENCY_KEY_MAX_LENGTH = 255
 CREATE_OPERATION = SubmissionOperation.CREATE
 EDIT_OPERATION = SubmissionOperation.EDIT
 FINALIZE_OPERATION = SubmissionOperation.FINALIZE
+REORDER_OPERATION = SubmissionOperation.REORDER_MEDIA
+
+# The read model only resumes a submission the owner can still act on or is
+# waiting on review for; every terminal state fails closed as NOT_FOUND.
+RESUMABLE_SUBMISSION_STATES = (Request.State.DRAFT, Request.State.PENDING)
 
 # The adopted contract fixes the inclusive duplicate radius in metres and the
 # owner-facing states that participate in the owner-scoped half of the check.
@@ -210,6 +215,74 @@ def submission_snapshot(validated, submission_id, state):
         tags=tuple(tag.display for tag in validated.tags),
         description=validated.description,
         website=validated.website,
+    )
+
+
+@dataclass(frozen=True)
+class SubmissionMediaState:
+    """Owner-safe resume read model: submission content plus non-sensitive media state.
+
+    ``attachments`` and ``media_intents`` are the live model rows (already free of
+    storage secrets by their own GraphQL type field lists), not a frozen snapshot,
+    since this is a read path with no idempotency evidence to replay.
+    """
+
+    submission: SubmissionSnapshot
+    attachments: Tuple
+    media_intents: Tuple
+
+
+def _stored_submission_snapshot(submission):
+    """Build a SubmissionSnapshot directly from stored, already-valid content."""
+    location = submission.address.location
+    tags = tuple(
+        link.display
+        for link in submission.request_tags.order_by("position", "pk")
+    )
+    return SubmissionSnapshot(
+        submission_id=submission.pk,
+        state=str(submission.state),
+        name=submission.name,
+        category_slug=submission.category.slug,
+        longitude=location.x,
+        latitude=location.y,
+        address_label=submission.address.addressString,
+        tags=tags,
+        description=submission.description,
+        website=submission.website,
+    )
+
+
+def submission_media_state(actor, submission_id):
+    """Read one owner-held draft/pending submission plus its non-sensitive media state.
+
+    No row is locked: this is a plain read for UI resume/reconnect, not a
+    transition. Another owner's submission and a missing or terminal-state one
+    all share the same NOT_FOUND outcome.
+    """
+    if not getattr(actor, "is_authenticated", False) or not actor.is_active:
+        raise SubmissionAuthenticationRequired("active authentication is required")
+    try:
+        submission = (
+            Request.objects.select_related("address", "category")
+            .get(pk=submission_id, owner_id=actor.pk)
+        )
+    except (Request.DoesNotExist, ValidationError, ValueError, TypeError) as error:
+        raise SubmissionNotFound("submission not found") from error
+    if submission.state not in RESUMABLE_SUBMISSION_STATES:
+        raise SubmissionNotFound("submission not found")
+
+    attachments = tuple(
+        Image.objects.filter(request=submission, is_managed=True, state="attached")
+        .order_by("position", "pk")
+    )
+    media_intents = tuple(
+        MediaUploadIntent.objects.filter(submission=submission).order_by("slot", "id")
+    )
+    return SubmissionMediaState(
+        submission=_stored_submission_snapshot(submission),
+        attachments=attachments,
+        media_intents=media_intents,
     )
 
 
@@ -693,6 +766,115 @@ def _require_ready_media(actor, submission):
     if attached_intent_ids != expected_attached_intent_ids:
         raise MediaNotReady("submission media is not ready for finalization")
     return attachments
+
+
+def _normalized_attachment_ids(raw_ids):
+    if isinstance(raw_ids, (str, bytes)) or not isinstance(raw_ids, (list, tuple)):
+        raise SubmissionInputError("attachment_ids", "attachment_ids must be a list")
+    if len(raw_ids) > MAX_RETAINED_ATTACHMENTS:
+        raise SubmissionInputError(
+            "attachment_ids",
+            f"attachment_ids must contain at most {MAX_RETAINED_ATTACHMENTS} entries",
+        )
+    normalized = []
+    for raw_id in raw_ids:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, (int, str)):
+            raise SubmissionInputError("attachment_ids", "attachment_ids must be integers")
+        try:
+            normalized.append(int(raw_id))
+        except (TypeError, ValueError) as error:
+            raise SubmissionInputError(
+                "attachment_ids", "attachment_ids must be integers"
+            ) from error
+    if len(set(normalized)) != len(normalized):
+        raise SubmissionInputError(
+            "attachment_ids", "attachment_ids must not contain duplicates"
+        )
+    return tuple(normalized)
+
+
+def _record_media_reorder(*, actor, key, request_hash, submission, result):
+    """Idempotency evidence only: reorder is media bookkeeping, not a state change.
+
+    No SubmissionLifecycleEvent is written, matching every MEDIA_* operation
+    (attach/expire/cleanup/...), none of which produce lifecycle events either.
+    """
+    return SubmissionIdempotency.objects.create(
+        actor=actor,
+        operation=REORDER_OPERATION,
+        key=key,
+        request_hash=request_hash,
+        submission=submission,
+        original_result=result,
+    )
+
+
+def reorder_attached_media(actor, submission_id, idempotency_key, attachment_ids):
+    """Atomically permute the complete retained attached-media set of one draft.
+
+    ``attachment_ids`` must be an exact duplicate-free permutation of the
+    submission's currently attached managed image ids; anything else (a
+    subset, an extra id, a foreign id) is rejected without writing anything.
+    """
+    key = validate_idempotency_key(idempotency_key)
+    normalized_ids = _normalized_attachment_ids(attachment_ids)
+    request_hash = _hash_payload(
+        {
+            "attachment_ids": [str(value) for value in normalized_ids],
+            "submission_id": str(submission_id),
+        }
+    )
+
+    with transaction.atomic():
+        submission = _locked_owned_submission(actor, submission_id)
+        locked_actor = _locked_active_actor(actor)
+        if submission.owner_id != locked_actor.pk:
+            raise SubmissionNotFound("submission not found")
+
+        existing = _replayed_record(
+            locked_actor, REORDER_OPERATION, key, request_hash, submission
+        )
+        if existing is not None:
+            return tuple(existing.original_result["attachment_ids"]), True
+        if submission.state != Request.State.DRAFT:
+            raise SubmissionStateError("only a draft submission can reorder media")
+
+        # Canonical media lock order: submission (already locked), intents,
+        # then attachments -- matches finalize/remove so reorder serializes
+        # safely against them instead of racing.
+        list(
+            MediaUploadIntent.objects.select_for_update()
+            .filter(submission=submission)
+            .order_by("slot", "id")
+        )
+        attachments = list(
+            Image.objects.select_for_update()
+            .filter(request=submission, is_managed=True, state="attached")
+            .order_by("position", "pk")
+        )
+        current_ids = {image.pk for image in attachments}
+        if set(normalized_ids) != current_ids:
+            raise SubmissionInputError(
+                "attachment_ids",
+                "attachment_ids must exactly match the retained attachment set",
+            )
+
+        by_id = {image.pk: image for image in attachments}
+        for position, attachment_id in enumerate(normalized_ids):
+            image = by_id[attachment_id]
+            if image.position != position:
+                image.position = position
+                image.save(update_fields=["position"])
+
+        ordered = tuple(str(value) for value in normalized_ids)
+        _record_media_reorder(
+            actor=locked_actor,
+            key=key,
+            request_hash=request_hash,
+            submission=submission,
+            result={"reorder_version": 1, "attachment_ids": list(ordered)},
+        )
+        return ordered, False
 
 
 def canonical_name_lock_key(canonical):
