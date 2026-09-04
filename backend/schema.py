@@ -149,6 +149,7 @@ class MediaUploadIntentType(DjangoObjectType):
 
 class ManagedMediaAttachmentType(DjangoObjectType):
     submission_id = graphene.ID(required=True)
+    media_intent_id = graphene.ID(required=True)
 
     class Meta:
         model = Image
@@ -167,6 +168,9 @@ class ManagedMediaAttachmentType(DjangoObjectType):
 
     def resolve_submission_id(self, info):
         return str(self.request_id)
+
+    def resolve_media_intent_id(self, info):
+        return str(self.intent_id)
 
 
 class MediaUploadAuthorization(graphene.ObjectType):

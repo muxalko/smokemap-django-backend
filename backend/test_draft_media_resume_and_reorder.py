@@ -46,7 +46,7 @@ SUBMISSION_MEDIA_STATE_QUERY = """
     query MediaState($id: ID!) {
       submissionMediaStateV3(submissionId: $id) {
         submission { id state name }
-        attachments { id position state byteSize }
+        attachments { id position state byteSize mediaIntentId }
         mediaIntents { id state slot }
       }
     }
@@ -94,6 +94,17 @@ class SubmissionMediaStateTests(SubmissionFixtureMixin, TestCase):
             sorted(item.pk for item in state.media_intents),
             sorted([intent.pk, pending_intent.pk]),
         )
+
+    def test_attachment_exposes_its_actual_related_intent_id(self):
+        intent, image = self.attach_managed_image(self.submission, 0)
+
+        state = submission_media_state(self.owner, self.submission.pk)
+
+        [attachment] = state.attachments
+        self.assertEqual(attachment.pk, image.pk)
+        # The relation is read straight off the row's own FK, not inferred
+        # from slot/position agreement with a sibling intent.
+        self.assertEqual(attachment.intent_id, intent.pk)
 
     def test_pending_submission_is_resumable(self):
         finalize_submission(self.owner, self.submission.pk, "resume-pending-finalize")
@@ -151,6 +162,22 @@ class SubmissionMediaStateTests(SubmissionFixtureMixin, TestCase):
         self.assertNotIn("storageBucket", schema_text)
         self.assertNotIn("sealedObjectKey", schema_text)
         self.assertNotIn("objectKey", schema_text)
+
+    def test_graphql_attachments_expose_their_own_real_intent_id(self):
+        first_intent, first_image = self.attach_managed_image(self.submission, 2)
+        second_intent, second_image = self.attach_managed_image(self.submission, 0)
+
+        result = self.graphql.execute(
+            SUBMISSION_MEDIA_STATE_QUERY,
+            variable_values={"id": str(self.submission.pk)},
+            context_value=self.context(self.owner),
+        )
+
+        self.assertNotIn("errors", result)
+        attachments = result["data"]["submissionMediaStateV3"]["attachments"]
+        by_id = {item["id"]: item["mediaIntentId"] for item in attachments}
+        self.assertEqual(by_id[str(first_image.pk)], str(first_intent.pk))
+        self.assertEqual(by_id[str(second_image.pk)], str(second_intent.pk))
 
     def test_graphql_owner_isolation_reports_not_found(self):
         result = self.graphql.execute(
@@ -451,6 +478,67 @@ class ReorderAttachedMediaTests(SubmissionFixtureMixin, TestCase):
         )
         self.assertEqual(ordered, ())
         self.assertFalse(replayed)
+
+    def test_media_intent_id_survives_reorder_without_slot_position_inference(self):
+        # Reorder permutes position only; each intent's slot stays put at its
+        # original assignment, so after this rotation no attachment's new
+        # position agrees with its own intent's slot any more -- pairing by
+        # slot/position agreement would misidentify every attachment here.
+        original_intents = {image.pk: image.intent_id for image in self.images}
+        rotated = [self.images[2].pk, self.images[0].pk, self.images[1].pk]
+        reorder_attached_media(self.owner, self.submission.pk, "reorder-intent-id", rotated)
+
+        state = submission_media_state(self.owner, self.submission.pk)
+        for attachment in state.attachments:
+            self.assertNotEqual(
+                attachment.position,
+                MediaUploadIntent.objects.get(pk=attachment.intent_id).slot,
+                "fixture no longer demonstrates a slot/position mismatch",
+            )
+            self.assertEqual(attachment.intent_id, original_intents[attachment.pk])
+
+    def test_graphql_reorder_keeps_media_intent_id_bound_to_the_right_attachment(self):
+        original_intents = {image.pk: image.intent_id for image in self.images}
+        rotated = [self.images[2].pk, self.images[0].pk, self.images[1].pk]
+        reorder_attached_media(self.owner, self.submission.pk, "reorder-intent-id-gql", rotated)
+
+        result = self.graphql.execute(
+            SUBMISSION_MEDIA_STATE_QUERY,
+            variable_values={"id": str(self.submission.pk)},
+            context_value=self.context(self.owner),
+        )
+
+        self.assertNotIn("errors", result)
+        attachments = result["data"]["submissionMediaStateV3"]["attachments"]
+        self.assertEqual(len(attachments), 3)
+        for item in attachments:
+            image_pk = int(item["id"])
+            self.assertEqual(item["mediaIntentId"], str(original_intents[image_pk]))
+
+    def test_removal_targets_the_correct_attachment_after_reorder(self):
+        # The intent id read off the state (not the attachment's post-reorder
+        # position) is what identifies which image removal must delete.
+        rotated = [self.images[2].pk, self.images[0].pk, self.images[1].pk]
+        reorder_attached_media(self.owner, self.submission.pk, "reorder-before-remove", rotated)
+
+        target_intent_id = self.images[1].intent_id
+        sibling_ids = {self.images[0].pk, self.images[2].pk}
+
+        removed, replayed = remove_attached_media(
+            self.owner, target_intent_id, "remove-after-reorder"
+        )
+
+        self.assertFalse(replayed)
+        self.assertEqual(removed.pk, target_intent_id)
+        self.assertFalse(Image.objects.filter(pk=self.images[1].pk).exists())
+        self.assertEqual(
+            set(
+                Image.objects.filter(
+                    request=self.submission, is_managed=True, state="attached"
+                ).values_list("pk", flat=True)
+            ),
+            sibling_ids,
+        )
 
     def test_finalize_after_reorder_preserves_new_positions(self):
         rotated = [self.images[2].pk, self.images[0].pk, self.images[1].pk]
