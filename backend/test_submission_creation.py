@@ -382,9 +382,17 @@ class SubmissionCreationTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Request.objects.filter(pk=submission.pk).update(state="unknown")
         with self.assertRaises(IntegrityError), transaction.atomic():
-            SubmissionLifecycleEvent.objects.filter(submission=submission).update(
-                to_state=Request.State.PENDING
+            # Exercise the database invariant directly. The public queryset
+            # deliberately rejects every audit update before SQL is issued, so
+            # using it here would only retest application-level immutability.
+            table = connection.ops.quote_name(
+                SubmissionLifecycleEvent._meta.db_table
             )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {table} SET to_state = %s WHERE submission_id = %s",
+                    [Request.State.PENDING, submission.pk],
+                )
 
     def test_database_rejects_pending_to_expired_transition(self):
         created = self.create(key="pending-expiry-constraint", tags=[])
@@ -483,6 +491,13 @@ class ConcurrentSubmissionCreationTests(TransactionTestCase):
         self.user = get_user_model().objects.create_user(
             email="concurrent-submission-owner@smokemap.test",
             password="test",
+        )
+        # TransactionTestCase flushes rows, including migration-seeded
+        # reference data, after every test. Provision the fixture locally so
+        # this race is independent of the order of other transaction tests.
+        Category.objects.get_or_create(
+            slug="outdoors",
+            defaults={"name": "Outdoors", "description": "Outside."},
         )
 
     def test_concurrent_same_key_creates_one_draft_event_and_result(self):

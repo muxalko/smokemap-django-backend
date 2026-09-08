@@ -4,7 +4,7 @@ import uuid
 from datetime import timedelta
 from queue import Queue
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -13,7 +13,12 @@ from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from graphene.test import Client as GraphQLClient
 
+from . import moderation as moderation_services
+from . import submission_expiry as expiry_services
+from . import submissions as submission_services
+from .media import process_media_cleanup
 from .models import (
+    Category,
     Image,
     MediaUploadIntent,
     ModerationAudit,
@@ -31,6 +36,7 @@ from .moderation import (
     withdraw_submission,
 )
 from .schema import schema
+from .submission_expiry import process_submission_expiry
 from .submissions import (
     DuplicateSubmission,
     SubmissionStateError,
@@ -441,50 +447,294 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
     reset_sequences = True
 
     def setUp(self):
+        # TransactionTestCase flushes migration-seeded reference rows between
+        # methods. Keep every race independently runnable and order-agnostic.
+        Category.objects.get_or_create(
+            slug="outdoors",
+            defaults={"name": "Outdoors", "description": "Outside."},
+        )
         self.build_fixtures()
 
-    def test_simultaneous_approval_of_one_submission_materializes_once(self):
-        submission = self.create_pending()
-        barrier = threading.Barrier(2)
+    def run_paused_first(self, first, second, *, service, lock_name):
+        """Run two workers after proving the first owns the serialization lock."""
+        first_locked = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
         outcomes = Queue()
+        real_lock = getattr(service, lock_name)
 
-        def approve(key):
+        def paused_lock(*args, **kwargs):
+            result = real_lock(*args, **kwargs)
+            if threading.current_thread().name == "moderation-race-first":
+                first_locked.set()
+                if not release_first.wait(timeout=20):
+                    raise AssertionError("timed out waiting to release first race worker")
+            return result
+
+        def worker(label, operation, started=None):
             close_old_connections()
             try:
-                reviewer_id = (
-                    self.moderator.pk if key.endswith("0") else self.administrator.pk
-                )
-                actor = get_user_model().objects.get(pk=reviewer_id)
-                barrier.wait(timeout=10)
-                result = approve_submission(actor, submission.pk, key)
-                outcomes.put(("approved", result.place.pk))
-            except Exception as error:  # asserted below with the database outcome
-                outcomes.put((type(error).__name__, str(error)))
+                if started is not None:
+                    started.set()
+                outcomes.put((label, "ok", operation()))
+            except Exception as error:
+                outcomes.put((label, type(error).__name__, str(error)))
             finally:
                 close_old_connections()
 
-        threads = [
-            threading.Thread(target=approve, args=(f"race-{index}",), daemon=True)
-            for index in range(2)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=20)
-            self.assertFalse(thread.is_alive())
+        with patch.object(service, lock_name, side_effect=paused_lock):
+            first_thread = threading.Thread(
+                target=worker,
+                args=("first", first),
+                name="moderation-race-first",
+                daemon=True,
+            )
+            second_thread = threading.Thread(
+                target=worker,
+                args=("second", second, second_started),
+                name="moderation-race-second",
+                daemon=True,
+            )
+            first_thread.start()
+            try:
+                self.assertTrue(first_locked.wait(timeout=10))
+                second_thread.start()
+                self.assertTrue(second_started.wait(timeout=10))
+            finally:
+                release_first.set()
+            first_thread.join(timeout=30)
+            second_thread.join(timeout=30)
 
-        observed = [outcomes.get(timeout=1) for _ in range(2)]
-        self.assertEqual(sum(item[0] == "approved" for item in observed), 1)
-        self.assertEqual(
-            sum(item[0] == SubmissionStateError.__name__ for item in observed), 1
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        observed = [outcomes.get(timeout=1) for _index in range(2)]
+        return {item[0]: item[1:] for item in observed}
+
+    def actor(self, user):
+        return get_user_model().objects.get(pk=user.pk)
+
+    def make_due(self, submission):
+        old = timezone.now() - timedelta(days=31)
+        Request.objects.filter(pk=submission.pk).update(
+            date_created=old, date_updated=old
         )
-        self.assertEqual(Place.objects.count(), 1)
+        SubmissionIdempotency.objects.filter(submission=submission).update(
+            created_at=old
+        )
+        submission.refresh_from_db()
+        return submission
+
+    def make_cleanup_pending_media(self, submission):
+        intent, image = self.attach_media(submission)
+        image.delete()
+        now = timezone.now()
+        intent.state = MediaUploadIntent.State.CLEANUP_PENDING
+        intent.failure_code = "media_removed"
+        intent.failure_at = now
+        intent.save(
+            update_fields=["state", "failure_code", "failure_at", "updated_at"]
+        )
+        return intent
+
+    def assert_one_event(self, submission, operation):
         self.assertEqual(
             SubmissionLifecycleEvent.objects.filter(
-                submission=submission, operation=SubmissionOperation.APPROVE
+                submission=submission, operation=operation
             ).count(),
             1,
         )
+
+    def test_simultaneous_withdrawals_serialize_to_one_transition(self):
+        submission = self.create_pending()
+        outcomes = self.run_paused_first(
+            lambda: withdraw_submission(
+                self.actor(self.owner), submission.pk, "withdraw-race-first"
+            ).replayed,
+            lambda: withdraw_submission(
+                self.actor(self.owner), submission.pk, "withdraw-race-second"
+            ).replayed,
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        submission.refresh_from_db()
+        self.assertEqual(submission.state, Request.State.WITHDRAWN)
+        self.assert_one_event(submission, SubmissionOperation.WITHDRAW)
+
+    def test_simultaneous_rejections_serialize_to_one_transition(self):
+        submission = self.create_pending()
+        outcomes = self.run_paused_first(
+            lambda: reject_submission(
+                self.actor(self.moderator), submission.pk, "reject-race-first"
+            ).replayed,
+            lambda: reject_submission(
+                self.actor(self.administrator), submission.pk, "reject-race-second"
+            ).replayed,
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        submission.refresh_from_db()
+        self.assertEqual(submission.state, Request.State.REJECTED)
+        self.assert_one_event(submission, SubmissionOperation.REJECT)
+
+    def test_finalize_and_withdrawal_are_linearizable_in_both_orders(self):
+        finalize_first = self.create_draft(name="Finalize wins")
+        outcomes = self.run_paused_first(
+            lambda: finalize_submission(
+                self.actor(self.owner), finalize_first.pk, "finalize-race-first"
+            )[1],
+            lambda: withdraw_submission(
+                self.actor(self.owner), finalize_first.pk, "withdraw-after-finalize"
+            ).replayed,
+            service=submission_services,
+            lock_name="_locked_owned_submission",
+        )
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"], ("ok", False))
+        finalize_first.refresh_from_db()
+        self.assertEqual(finalize_first.state, Request.State.WITHDRAWN)
+        self.assert_one_event(finalize_first, SubmissionOperation.FINALIZE)
+        self.assert_one_event(finalize_first, SubmissionOperation.WITHDRAW)
+
+        withdrawal_first = self.create_draft(name="Withdrawal wins", longitude=10)
+        outcomes = self.run_paused_first(
+            lambda: withdraw_submission(
+                self.actor(self.owner), withdrawal_first.pk, "withdraw-race-first"
+            ).replayed,
+            lambda: finalize_submission(
+                self.actor(self.owner), withdrawal_first.pk, "finalize-after-withdraw"
+            )[1],
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        withdrawal_first.refresh_from_db()
+        self.assertEqual(withdrawal_first.state, Request.State.WITHDRAWN)
+        self.assertFalse(
+            SubmissionLifecycleEvent.objects.filter(
+                submission=withdrawal_first,
+                operation=SubmissionOperation.FINALIZE,
+            ).exists()
+        )
+        self.assert_one_event(withdrawal_first, SubmissionOperation.WITHDRAW)
+
+    def test_withdrawal_and_expiry_are_linearizable_in_both_orders(self):
+        withdrawal_first = self.make_due(
+            self.create_draft(name="Withdrawal before expiry")
+        )
+        outcomes = self.run_paused_first(
+            lambda: withdraw_submission(
+                self.actor(self.owner), withdrawal_first.pk, "withdraw-before-expiry"
+            ).replayed,
+            lambda: process_submission_expiry(now=timezone.now()).expired,
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"], ("ok", 0))
+        withdrawal_first.refresh_from_db()
+        self.assertEqual(withdrawal_first.state, Request.State.WITHDRAWN)
+        self.assert_one_event(withdrawal_first, SubmissionOperation.WITHDRAW)
+        self.assertFalse(
+            SubmissionLifecycleEvent.objects.filter(
+                submission=withdrawal_first,
+                operation=SubmissionOperation.EXPIRE,
+            ).exists()
+        )
+
+        expiry_first = self.make_due(
+            self.create_draft(name="Expiry before withdrawal", longitude=10)
+        )
+        outcomes = self.run_paused_first(
+            lambda: process_submission_expiry(now=timezone.now()).expired,
+            lambda: withdraw_submission(
+                self.actor(self.owner), expiry_first.pk, "withdraw-after-expiry"
+            ).replayed,
+            service=expiry_services,
+            lock_name="_handoff_media_for_expired_submission",
+        )
+        self.assertEqual(outcomes["first"], ("ok", 1))
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        expiry_first.refresh_from_db()
+        self.assertEqual(expiry_first.state, Request.State.EXPIRED)
+        self.assert_one_event(expiry_first, SubmissionOperation.EXPIRE)
+        self.assertFalse(
+            SubmissionLifecycleEvent.objects.filter(
+                submission=expiry_first,
+                operation=SubmissionOperation.WITHDRAW,
+            ).exists()
+        )
+
+    def assert_review_race(self, first_operation, second_operation, expected_state):
+        submission = self.create_pending(
+            name=f"{first_operation} before {second_operation}"
+        )
+        operations = {
+            "approve": lambda key: approve_submission(
+                self.actor(self.moderator), submission.pk, key
+            ).replayed,
+            "reject": lambda key: reject_submission(
+                self.actor(self.moderator), submission.pk, key
+            ).replayed,
+            "withdraw": lambda key: withdraw_submission(
+                self.actor(self.owner), submission.pk, key
+            ).replayed,
+        }
+        outcomes = self.run_paused_first(
+            lambda: operations[first_operation](f"{first_operation}-race-first"),
+            lambda: operations[second_operation](f"{second_operation}-race-second"),
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+        self.assertEqual(outcomes["first"], ("ok", False))
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        submission.refresh_from_db()
+        self.assertEqual(submission.state, expected_state)
+        self.assert_one_event(
+            submission, getattr(SubmissionOperation, first_operation.upper())
+        )
+        self.assertFalse(
+            SubmissionLifecycleEvent.objects.filter(
+                submission=submission,
+                operation=getattr(SubmissionOperation, second_operation.upper()),
+            ).exists()
+        )
+
+    def test_approval_and_rejection_are_linearizable_in_both_orders(self):
+        self.assert_review_race("approve", "reject", Request.State.APPROVED)
+        self.assert_review_race("reject", "approve", Request.State.REJECTED)
+
+    def test_approval_and_withdrawal_are_linearizable_in_both_orders(self):
+        self.assert_review_race("approve", "withdraw", Request.State.APPROVED)
+        self.assert_review_race("withdraw", "approve", Request.State.WITHDRAWN)
+
+    def test_rejection_and_withdrawal_are_linearizable_in_both_orders(self):
+        self.assert_review_race("reject", "withdraw", Request.State.REJECTED)
+        self.assert_review_race("withdraw", "reject", Request.State.WITHDRAWN)
+
+    def test_simultaneous_approval_of_one_submission_materializes_once(self):
+        submission = self.create_pending()
+        outcomes = self.run_paused_first(
+            lambda: approve_submission(
+                self.actor(self.moderator), submission.pk, "approval-race-first"
+            ).place.pk,
+            lambda: approve_submission(
+                self.actor(self.administrator), submission.pk, "approval-race-second"
+            ).place.pk,
+            service=moderation_services,
+            lock_name="_locked_submission",
+        )
+
+        self.assertEqual(outcomes["first"][0], "ok")
+        self.assertEqual(outcomes["second"][0], SubmissionStateError.__name__)
+        self.assertEqual(Place.objects.count(), 1)
+        self.assert_one_event(submission, SubmissionOperation.APPROVE)
 
     def test_same_canonical_name_approvals_cannot_both_pass_duplicate_check(self):
         first = self.create_pending(name="Contested Name")
@@ -493,43 +743,19 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
             name="  contested\tname ",
             longitude=-77.03649,
         )
-        barrier = threading.Barrier(2)
-        outcomes = Queue()
-
-        def approve(submission_id, key):
-            close_old_connections()
-            try:
-                reviewer_id = (
-                    self.moderator.pk if key.endswith("0") else self.administrator.pk
-                )
-                actor = get_user_model().objects.get(pk=reviewer_id)
-                barrier.wait(timeout=10)
-                result = approve_submission(actor, submission_id, key)
-                outcomes.put(("approved", result.place.pk))
-            except Exception as error:  # asserted below with the database outcome
-                outcomes.put((type(error).__name__, str(error)))
-            finally:
-                close_old_connections()
-
-        threads = [
-            threading.Thread(
-                target=approve,
-                args=(submission_id, f"canonical-race-{index}"),
-                daemon=True,
-            )
-            for index, submission_id in enumerate((first.pk, second.pk))
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=20)
-            self.assertFalse(thread.is_alive())
-
-        observed = [outcomes.get(timeout=1) for _ in range(2)]
-        self.assertEqual(sum(item[0] == "approved" for item in observed), 1)
-        self.assertEqual(
-            sum(item[0] == DuplicateSubmission.__name__ for item in observed), 1
+        outcomes = self.run_paused_first(
+            lambda: approve_submission(
+                self.actor(self.moderator), first.pk, "canonical-race-first"
+            ).place.pk,
+            lambda: approve_submission(
+                self.actor(self.administrator), second.pk, "canonical-race-second"
+            ).place.pk,
+            service=moderation_services,
+            lock_name="acquire_canonical_name_lock",
         )
+
+        self.assertEqual(outcomes["first"][0], "ok")
+        self.assertEqual(outcomes["second"][0], DuplicateSubmission.__name__)
         self.assertEqual(Place.objects.count(), 1)
         self.assertEqual(
             SubmissionLifecycleEvent.objects.filter(
@@ -537,3 +763,63 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
             ).count(),
             1,
         )
+
+    def test_withdrawal_preserves_an_in_flight_media_cleanup_handoff(self):
+        submission = self.create_draft(name="Cleanup claim race")
+        intent = self.make_cleanup_pending_media(submission)
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        outcomes = Queue()
+        storage = Mock()
+        storage.object_is_absent.return_value = True
+
+        def paused_delete(**kwargs):
+            if not cleanup_started.is_set():
+                cleanup_started.set()
+                if not release_cleanup.wait(timeout=20):
+                    raise AssertionError("timed out waiting to release cleanup")
+
+        storage.delete_object.side_effect = paused_delete
+
+        def cleanup_worker():
+            close_old_connections()
+            try:
+                counts = process_media_cleanup(storage=storage, now=timezone.now())
+                outcomes.put(
+                    (
+                        "cleanup",
+                        "ok",
+                        counts.claimed,
+                        counts.deleted,
+                        counts.skipped,
+                    )
+                )
+            except Exception as error:
+                outcomes.put(("cleanup", type(error).__name__, str(error)))
+            finally:
+                close_old_connections()
+
+        cleanup_thread = threading.Thread(
+            target=cleanup_worker, name="moderation-media-cleanup", daemon=True
+        )
+        cleanup_thread.start()
+        try:
+            self.assertTrue(cleanup_started.wait(timeout=10))
+            result = withdraw_submission(
+                self.owner, submission.pk, "withdraw-during-cleanup"
+            )
+            self.assertFalse(result.replayed)
+        finally:
+            release_cleanup.set()
+        cleanup_thread.join(timeout=30)
+        self.assertFalse(cleanup_thread.is_alive())
+
+        observed = outcomes.get(timeout=1)
+        self.assertEqual(observed, ("cleanup", "ok", 1, 1, 0))
+        submission.refresh_from_db()
+        intent.refresh_from_db()
+        self.assertEqual(submission.state, Request.State.WITHDRAWN)
+        self.assertEqual(intent.state, MediaUploadIntent.State.DELETED)
+        self.assertIsNone(intent.cleanup_claim_token)
+        self.assert_one_event(submission, SubmissionOperation.WITHDRAW)
+        self.assertEqual(storage.delete_object.call_count, 2)

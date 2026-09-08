@@ -159,8 +159,15 @@ def _retire_submission_media(submission, *, failure_code):
     for image in images:
         image.delete()
     for intent in intents:
-        if intent.state != MediaUploadIntent.State.DELETED:
-            _expire_locked_intent(intent, now, failure_code=failure_code)
+        if intent.state == MediaUploadIntent.State.DELETED:
+            continue
+        # A cleanup worker deliberately releases the aggregate lock while it
+        # deletes exact object keys. Preserve an existing claim and its retry
+        # schedule so a concurrent lifecycle transition cannot invalidate the
+        # worker's durable completion after storage I/O has already begun.
+        if intent.state == MediaUploadIntent.State.CLEANUP_PENDING:
+            continue
+        _expire_locked_intent(intent, now, failure_code=failure_code)
 
 
 def _assert_no_nearby_public_duplicate(submission, canonical):
