@@ -532,7 +532,33 @@ class SubmissionIdempotency(models.Model):
 SYSTEM_DRAFT_EXPIRY_ACTOR = "draft-expiry.v3"
 
 
-class SubmissionLifecycleEvent(models.Model):
+class ImmutableAuditQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Audit events are immutable.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError("Audit events are immutable.")
+
+    def delete(self):
+        raise ValidationError("Audit events are immutable.")
+
+
+class ImmutableAuditEvent(models.Model):
+    objects = ImmutableAuditQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Audit events are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Audit events are immutable.")
+
+
+class SubmissionLifecycleEvent(ImmutableAuditEvent):
     DRAFT_EXPIRY_SYSTEM_ACTOR = SYSTEM_DRAFT_EXPIRY_ACTOR
 
     class Outcome(models.TextChoices):
@@ -646,7 +672,7 @@ class SubmissionLifecycleEvent(models.Model):
         ]
 
 
-class ModerationAudit(models.Model):
+class ModerationAudit(ImmutableAuditEvent):
     class Action(models.TextChoices):
         APPROVE = "approve", "Approve"
         HARD_DELETE = "hard_delete", "Hard delete"

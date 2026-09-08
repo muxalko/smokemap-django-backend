@@ -233,6 +233,23 @@ account exists.
 
 ## Local moderation administrator
 
+Moderation writes use the versioned GraphQL lifecycle mutations
+`withdrawSubmissionV4`, `approveSubmissionV4`, and `rejectSubmissionV4`.
+Each mutation requires an idempotency key. Withdrawal is limited to the active
+owner of a draft or pending submission; approval and rejection require an
+active moderator or administrator and ordinary review cannot target the
+reviewer's own submission.
+
+The services lock the submission aggregate and commit its state, authenticated
+actor, reviewer metadata, and append-only lifecycle event together. Approval
+also takes a transaction-scoped lock derived from the complete normalized place
+name and rechecks nearby public places before materializing exactly one `Place`.
+Rejection and withdrawal remove retained attachment rows and move their exact
+owner-bound upload intents to `cleanup_pending`; the existing media cleanup job
+deletes object-store data outside the lifecycle transaction. Exceptional hard
+deletion remains administrator-only, leaves a standalone durable audit record,
+and refuses deletion while managed media still requires cleanup.
+
 Create or update a local-only administrator with an interactively entered password:
 
 ```sh
