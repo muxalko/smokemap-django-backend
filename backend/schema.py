@@ -27,7 +27,6 @@ from .permissions import (
 )
 from django.contrib.auth import authenticate
 import graphql_geojson
-from django.db import transaction
 from django.db.models import Prefetch, Q
 from .submissions import (
     IdempotencyConflict,
@@ -53,6 +52,12 @@ from .media import (
     verify_upload,
 )
 from .media_storage import StorageOperationError
+from .moderation import (
+    approve_submission,
+    hard_delete_submission,
+    reject_submission,
+    withdraw_submission,
+)
 from .tokens import (
     INVALID_TOKEN,
     TokenLifecycleError,
@@ -653,6 +658,81 @@ class ReorderSubmissionMediaV3(graphene.Mutation):
         return cls(ordered_attachment_ids=list(ordered_ids), replayed=replayed)
 
 
+class WithdrawSubmissionV4(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    submission = graphene.Field(RequestType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key):
+        actor = require_active_user(info)
+        try:
+            result = withdraw_submission(actor, submission_id, idempotency_key)
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_WITHDRAW_FAILED")
+        return cls(submission=result.submission, replayed=result.replayed)
+
+
+class ReviewSubmissionV4Input(graphene.InputObjectType):
+    comment = graphene.String()
+
+
+class ApproveSubmissionV4(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+        input = ReviewSubmissionV4Input()
+
+    submission = graphene.Field(RequestType, required=True)
+    place = graphene.Field(PlaceType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key, input=None):
+        actor = require_moderator(info)
+        try:
+            result = approve_submission(
+                actor,
+                submission_id,
+                idempotency_key,
+                getattr(input, "comment", None),
+            )
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_APPROVE_FAILED")
+        return cls(
+            submission=result.submission,
+            place=result.place,
+            replayed=result.replayed,
+        )
+
+
+class RejectSubmissionV4(graphene.Mutation):
+    class Arguments:
+        submission_id = graphene.ID(required=True)
+        idempotency_key = graphene.String(required=True)
+        input = ReviewSubmissionV4Input()
+
+    submission = graphene.Field(RequestType, required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, submission_id, idempotency_key, input=None):
+        actor = require_moderator(info)
+        try:
+            result = reject_submission(
+                actor,
+                submission_id,
+                idempotency_key,
+                getattr(input, "comment", None),
+            )
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_REJECT_FAILED")
+        return cls(submission=result.submission, replayed=result.replayed)
+
+
 class DeleteRequest(graphene.Mutation):
     ok = graphene.Boolean()
 
@@ -662,18 +742,10 @@ class DeleteRequest(graphene.Mutation):
     @classmethod
     def mutate(cls, root, info, id):
         actor = require_administrator(info)
-        request = Request.objects.exclude(state=Request.State.APPROVED).filter(pk=id).first()
-        if request is None:
-            graphql_authorization_error("Submission not found", NOT_FOUND)
-
-        with transaction.atomic():
-            ModerationAudit.objects.create(
-                actor=actor,
-                action=ModerationAudit.Action.HARD_DELETE,
-                target_type="request",
-                target_id=request.pk,
-            )
-            request.delete()
+        try:
+            hard_delete_submission(actor, id)
+        except Exception as error:
+            _raise_submission_graphql_error(error, "SUBMISSION_DELETE_FAILED")
         return cls(ok=True)
 
 
@@ -1035,6 +1107,9 @@ class Mutation(graphene.ObjectType):
     edit_submission_v3 = EditSubmissionV3.Field()
     finalize_submission_v3 = FinalizeSubmissionV3.Field()
     reorder_submission_media_v3 = ReorderSubmissionMediaV3.Field()
+    withdraw_submission_v4 = WithdrawSubmissionV4.Field()
+    approve_submission_v4 = ApproveSubmissionV4.Field()
+    reject_submission_v4 = RejectSubmissionV4.Field()
     create_media_upload_intent = CreateMediaUploadIntent.Field()
     issue_media_upload_intent = IssueMediaUploadIntent.Field()
     renew_media_upload_intent = RenewMediaUploadIntent.Field()

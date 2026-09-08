@@ -1002,7 +1002,7 @@ class SubmissionFinalizationTests(SubmissionFixtureMixin, TestCase):
             ).exists()
         )
 
-    def test_legacy_and_m4_write_paths_remain_unreachable(self):
+    def test_legacy_and_unversioned_write_paths_remain_unreachable(self):
         legacy_operations = (
             """
             mutation {
@@ -1036,14 +1036,17 @@ class SubmissionFinalizationTests(SubmissionFixtureMixin, TestCase):
         self.assertIn("finalizeSubmissionV3", mutation_fields)
         for reserved in (
             "withdrawSubmissionV3",
-            "withdrawSubmissionV4",
             "approveSubmissionV3",
-            "approveSubmissionV4",
             "rejectSubmissionV3",
-            "rejectSubmissionV4",
             "expireSubmissionV3",
         ):
             self.assertNotIn(reserved, mutation_fields)
+        for m4_operation in (
+            "withdrawSubmissionV4",
+            "approveSubmissionV4",
+            "rejectSubmissionV4",
+        ):
+            self.assertIn(m4_operation, mutation_fields)
 
         self.assertFalse(
             Request.objects.filter(
