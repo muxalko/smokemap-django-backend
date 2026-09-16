@@ -175,6 +175,10 @@ class Request(models.Model):
                 fields=["state", "date_updated", "id"],
                 name="request_expiry_scan_idx",
             ),
+            models.Index(
+                fields=["state", "date_created", "id"],
+                name="request_mod_queue_idx",
+            ),
         ]
         constraints = [
             models.CheckConstraint(

@@ -250,6 +250,18 @@ deletes object-store data outside the lifecycle transaction. Exceptional hard
 deletion remains administrator-only, leaves a standalone durable audit record,
 and refuses deletion while managed media still requires cleanup.
 
+Moderation reads use `moderationQueueV4(first, after)`. The query is limited to
+active moderators and administrators, returns pending submissions oldest-first
+with an ID tie-breaker, defaults to 20 rows, and rejects page sizes outside 1
+through 50. `after` is an opaque, signed keyset cursor; clients should only pass
+back cursors returned as `nextCursor` and continue only while `hasNextPage` is
+true. The legacy `requestsToApprove` field remains available for small existing
+clients but is capped at the first 50 rows in the same stable order.
+
+Queue objects do not contain private attachment locations or storage metadata.
+Review clients must request each pending attachment through the separately
+authorized, short-lived `mediaAttachmentPreviewV3` capability.
+
 Create or update a local-only administrator with an interactively entered password:
 
 ```sh

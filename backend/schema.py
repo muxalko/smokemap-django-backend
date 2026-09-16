@@ -58,6 +58,12 @@ from .moderation import (
     reject_submission,
     withdraw_submission,
 )
+from .moderation_queue import (
+    LEGACY_PAGE_SIZE,
+    ModerationQueueInputError,
+    moderation_queue_page,
+    pending_moderation_queryset,
+)
 from .tokens import (
     INVALID_TOKEN,
     TokenLifecycleError,
@@ -244,6 +250,12 @@ class RequestType(DjangoObjectType):
             'approved_comment',
             'state',
         )
+
+
+class ModerationQueuePageV4(graphene.ObjectType):
+    items = graphene.List(graphene.NonNull(RequestType), required=True)
+    has_next_page = graphene.Boolean(required=True)
+    next_cursor = graphene.String()
 # TODO: make all methods use **kwargs to use decorator
 ##############################DECORATORS##############################
 def anonymous_return(value):
@@ -292,6 +304,12 @@ class Query(graphene.ObjectType):
     # )
     requests = graphene.List(RequestType)
     requests_to_approve = graphene.List(RequestType)
+    moderation_queue_v4 = graphene.Field(
+        ModerationQueuePageV4,
+        first=graphene.Int(),
+        after=graphene.String(),
+        required=True,
+    )
     request_by_id = graphene.Field(
         RequestType,
         id=graphene.ID()
@@ -375,8 +393,21 @@ class Query(graphene.ObjectType):
     def resolve_requests_to_approve(root, info, **kwargs):
         require_moderator(info)
         return request_queryset_with_tags(
-            Request.objects.filter(state=Request.State.PENDING)
-        )
+            pending_moderation_queryset()
+        ).order_by("date_created", "pk")[:LEGACY_PAGE_SIZE]
+
+    def resolve_moderation_queue_v4(root, info, first=None, after=None):
+        require_moderator(info)
+        try:
+            return moderation_queue_page(
+                first=first,
+                after=after,
+                queryset=request_queryset_with_tags(
+                    pending_moderation_queryset()
+                ),
+            )
+        except ModerationQueueInputError as error:
+            graphql_authorization_error(str(error), error.code)
 
     def resolve_request_by_id(root, info, id):
         user = require_active_user(info)
