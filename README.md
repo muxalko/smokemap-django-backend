@@ -259,8 +259,10 @@ true. The legacy `requestsToApprove` field remains available for small existing
 clients but is capped at the first 50 rows in the same stable order.
 
 Queue objects do not contain private attachment locations or storage metadata.
-Review clients must request each pending attachment through the separately
-authorized, short-lived `mediaAttachmentPreviewV3` capability.
+Their `attachments` field exposes only each retained managed attachment's ID and
+display position. Review clients pass the ID to the separately authorized,
+short-lived `mediaAttachmentPreviewV3` capability. Buckets, object keys, upload
+intent IDs, hashes, credentials, and permanent URLs remain private.
 
 Create or update a local-only administrator with an interactively entered password:
 

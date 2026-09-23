@@ -10,14 +10,21 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from graphene.test import Client as GraphQLClient
 
-from .models import Address, Category, Request
+from .models import Address, Category, Image, Request
 from .schema import schema
+from .test_submission_finalization import SubmissionFixtureMixin
 
 
 QUEUE_QUERY = """
     query Queue($first: Int, $after: String) {
       moderationQueueV4(first: $first, after: $after) {
-        items { id name state tags }
+        items {
+          id
+          name
+          state
+          tags
+          attachments { id position }
+        }
         hasNextPage
         nextCursor
       }
@@ -25,7 +32,7 @@ QUEUE_QUERY = """
 """
 
 
-class ModerationQueueGraphQLTests(TestCase):
+class ModerationQueueGraphQLTests(SubmissionFixtureMixin, TestCase):
     def setUp(self):
         user_model = get_user_model()
         self.owner = user_model.objects.create_user(
@@ -33,6 +40,11 @@ class ModerationQueueGraphQLTests(TestCase):
         )
         self.user = user_model.objects.create_user(
             email="queue-user@smokemap.test", password="test"
+        )
+        self.inactive = user_model.objects.create_user(
+            email="queue-inactive@smokemap.test",
+            password="test",
+            is_active=False,
         )
         self.moderator = user_model.objects.create_user(
             email="queue-moderator@smokemap.test",
@@ -90,6 +102,7 @@ class ModerationQueueGraphQLTests(TestCase):
     def test_queue_requires_a_moderator_or_administrator(self):
         for actor, expected in (
             (self.guest, "UNAUTHENTICATED"),
+            (self.inactive, "UNAUTHENTICATED"),
             (self.user, "FORBIDDEN"),
         ):
             with self.subTest(expected=expected):
@@ -192,22 +205,71 @@ class ModerationQueueGraphQLTests(TestCase):
         self.assertNotIn(str(draft.pk), all_ids)
 
     def test_queue_schema_does_not_expose_private_media_storage(self):
-        self.create_submissions(1)
-        result = self.queue(self.moderator)
-        serialized = json.dumps(result)
-        for private_name in (
-            "imageSet",
-            "mediaUploadIntents",
-            "storageBucket",
-            "storageKey",
-            "objectKey",
-            "sealedObjectKey",
-            "credentials",
-        ):
-            self.assertNotIn(private_name, serialized)
+        pending, second_pending = self.create_submissions(2)
+        _later_intent, later = self.attach_managed_image(
+            pending,
+            1,
+            owner=self.owner,
+        )
+        _first_intent, first = self.attach_managed_image(
+            pending,
+            0,
+            owner=self.owner,
+        )
+        Image.objects.create(
+            set_id="legacy",
+            name="legacy.png",
+            url="https://public.invalid/legacy.png",
+            request=pending,
+        )
+        draft = self.create_submissions(1, state=Request.State.DRAFT)[0]
+        self.attach_managed_image(draft, 0, owner=self.owner)
+
+        for reviewer in (self.moderator, self.administrator):
+            with self.subTest(reviewer=reviewer.email):
+                with CaptureQueriesContext(connection) as captured:
+                    result = self.queue(reviewer)
+                self.assertNotIn("errors", result)
+                items = result["data"]["moderationQueueV4"]["items"]
+                self.assertEqual(
+                    items[0]["attachments"],
+                    [
+                        {"id": str(first.pk), "position": 0},
+                        {"id": str(later.pk), "position": 1},
+                    ],
+                )
+                self.assertEqual(items[1]["id"], str(second_pending.pk))
+                self.assertEqual(items[1]["attachments"], [])
+                image_queries = [
+                    query["sql"]
+                    for query in captured.captured_queries
+                    if 'FROM "backend_image"' in query["sql"]
+                ]
+                self.assertEqual(len(image_queries), 1)
+
+                serialized = json.dumps(result)
+                for private_name in (
+                    "imageSet",
+                    "mediaIntentId",
+                    "mediaUploadIntents",
+                    "storageIdentifier",
+                    "storageBucket",
+                    "storageKey",
+                    "objectKey",
+                    "sealedObjectKey",
+                    "sha256",
+                    "credentials",
+                    "url",
+                ):
+                    self.assertNotIn(private_name, serialized)
 
         request_type = schema.graphql_schema.get_type("RequestType")
         self.assertNotIn("imageSet", request_type.fields)
+        self.assertIn("attachments", request_type.fields)
+        attachment_type = schema.graphql_schema.get_type(
+            "ModerationMediaAttachmentV4"
+        )
+        self.assertEqual(set(attachment_type.fields), {"id", "position"})
         self.assertIn("mediaAttachmentPreviewV3", schema.graphql_schema.query_type.fields)
 
     def test_model_declares_the_keyset_ordering_index(self):
