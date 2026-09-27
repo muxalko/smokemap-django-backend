@@ -23,6 +23,7 @@ from .models import (
     Request,
     RequestTag,
     SubmissionIdempotency,
+    SubmissionLifecycleEvent,
     SubmissionOperation,
     Tag,
 )
@@ -419,6 +420,24 @@ def hard_delete_submission(actor, submission_id):
             raise ModerationMediaCleanupRequired(
                 "submission image metadata and managed media must be cleaned "
                 "before hard deletion"
+            )
+
+        # A lifecycle event is immutable evidence, and its idempotency record
+        # supplies the exact operation identity and original result.  Neither
+        # may be cascaded away merely because the mutable submission aggregate
+        # is eligible for exceptional deletion.  The protected foreign keys are
+        # the database backstop; this explicit refusal keeps the service error
+        # stable and makes the policy visible at the authorization boundary.
+        if (
+            SubmissionLifecycleEvent.objects.select_for_update()
+            .filter(submission=submission)
+            .exists()
+            or SubmissionIdempotency.objects.select_for_update()
+            .filter(submission=submission, media_intent__isnull=True)
+            .exists()
+        ):
+            raise SubmissionStateError(
+                "submission audit evidence prevents hard deletion"
             )
 
         # Deleted intents have no remaining object. Their operation evidence is

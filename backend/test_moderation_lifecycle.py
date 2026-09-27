@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections
+from django.db.models.deletion import ProtectedError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from graphene.test import Client as GraphQLClient
@@ -447,8 +448,17 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
                 actor=self.administrator
             )
 
-    def test_hard_delete_remains_admin_only_and_keeps_standalone_audit(self):
-        submission = self.create_pending()
+    def test_hard_delete_remains_admin_only_for_unaudited_legacy_submission(self):
+        source = self.create_draft(name="Legacy deletion address source")
+        submission = Request.objects.create(
+            name="Unaudited legacy submission",
+            category=source.category,
+            description="Imported before lifecycle auditing",
+            address=source.address,
+            owner=self.owner,
+            state=Request.State.REJECTED,
+            approved=False,
+        )
         target_id = submission.pk
 
         with self.assertRaisesMessage(ValueError, "administrator"):
@@ -463,6 +473,46 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
                 action=ModerationAudit.Action.HARD_DELETE,
                 target_id=target_id,
                 outcome="succeeded",
+            ).exists()
+        )
+
+    def test_hard_delete_refuses_and_preserves_complete_lifecycle_evidence(self):
+        submission = self.create_pending()
+        reject_submission(
+            self.moderator,
+            submission.pk,
+            "retained-rejection",
+            "  Preserve this reason  ",
+        )
+        event = SubmissionLifecycleEvent.objects.get(
+            submission=submission,
+            operation=SubmissionOperation.REJECT,
+        )
+        event_identity = event.pk
+        idempotency_identity = event.idempotency_id
+        event_timestamp = event.created_at
+
+        with self.assertRaisesMessage(ValueError, "audit evidence"):
+            hard_delete_submission(self.administrator, submission.pk)
+        with self.assertRaises(ProtectedError):
+            submission.delete()
+
+        self.assertTrue(Request.objects.filter(pk=submission.pk).exists())
+        preserved = SubmissionLifecycleEvent.objects.get(pk=event_identity)
+        self.assertEqual(preserved.submission_id, submission.pk)
+        self.assertEqual(preserved.idempotency_id, idempotency_identity)
+        self.assertEqual(preserved.comment, "Preserve this reason")
+        self.assertEqual(preserved.created_at, event_timestamp)
+        self.assertTrue(
+            SubmissionIdempotency.objects.filter(
+                pk=idempotency_identity,
+                submission=submission,
+                key="retained-rejection",
+            ).exists()
+        )
+        self.assertFalse(
+            ModerationAudit.objects.filter(
+                target_type="request", target_id=submission.pk
             ).exists()
         )
 

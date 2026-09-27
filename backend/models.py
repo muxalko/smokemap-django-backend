@@ -472,7 +472,7 @@ class SubmissionIdempotency(models.Model):
     request_hash = models.CharField(max_length=64, editable=False)
     submission = models.ForeignKey(
         Request,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="idempotency_records",
     )
     media_intent = models.ForeignKey(
@@ -570,7 +570,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
 
     submission = models.ForeignKey(
         Request,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="lifecycle_events",
     )
     actor = models.ForeignKey(
@@ -595,7 +595,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
         SubmissionIdempotency,
         blank=True,
         null=True,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="lifecycle_event",
     )
     created_at = models.DateTimeField(auto_now_add=True)
