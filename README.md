@@ -172,6 +172,29 @@ at 20; `placesStartwithName` retains prefix-only semantics while applying the
 same normalization and cap. The legacy search client therefore cannot fetch the
 complete place-name collection.
 
+### Legacy GraphQL place reads
+
+These public GraphQL fields keep their response shapes until the frontend search
+migration ([smokemap-webapp#10](https://github.com/muxalko/smokemap-webapp/issues/10))
+lands:
+
+| Field | Current behavior | Status |
+| --- | --- | --- |
+| `places` | Every `Place`, unbounded | Deprecated |
+| `placesNames` | First 20 names by lowercased name, then ID | Legacy, capped |
+| `placesByName(name)` | First 20 exact-name matches by ID | Legacy, capped |
+| `placesStartwithName(name)` | First 20 normalized prefix matches | Legacy, capped |
+| `placeById(id)` | One `Place` | Supported |
+
+The unbounded `places` field is deprecated in the schema, but it still returns
+every approved `Place` and never returns submission `Request` rows. The current
+frontend does not select it. New clients should use
+`GET /api/v1/places/search/` for name search and `GET /api/v1/places/` for
+viewport reads. `places` can only be bounded or removed once the frontend search
+migration has shipped and no supported client selects it. The same condition
+applies before `placesNames` and `placesStartwithName` are formally deprecated.
+Tests in `backend/test_place_search.py` pin this behavior.
+
 Inspect both natural query plans against a deterministic 20,000-place corpus:
 
 ```sh

@@ -84,6 +84,10 @@ import logging
 logger = logging.getLogger( __name__ )
 
 LEGACY_PUBLIC_PLACE_LIMIT = 20
+PLACES_DEPRECATION_REASON = (
+    "Unbounded; use GET /api/v1/places/search/ for name search or "
+    "GET /api/v1/places/ for viewport reads."
+)
 
 ##################################TYPES###############################
 class UserType(DjangoObjectType):
@@ -377,7 +381,10 @@ class Query(graphene.ObjectType):
         attachment_id=graphene.ID(required=True),
     )
 
-    places = graphene.List(PlaceType)
+    places = graphene.List(
+        PlaceType,
+        deprecation_reason=PLACES_DEPRECATION_REASON,
+    )
 
     places_names = graphene.List(graphene.String)
 
@@ -506,7 +513,8 @@ class Query(graphene.ObjectType):
         return MediaPreviewAuthorization(url=url, expires_at=expires_at)
 
     def resolve_places(root, info):
-        # Querying a list
+        # Deprecated and intentionally unbounded until smokemap-webapp#10
+        # moves clients to the bounded search API (#105).
         return Place.objects.all()
     
     def resolve_places_names(root, info):

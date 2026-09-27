@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -27,7 +28,11 @@ from backend.place_search_plan import (
     report_failures,
     search_indexes,
 )
-from backend.schema import LEGACY_PUBLIC_PLACE_LIMIT, schema
+from backend.schema import (
+    LEGACY_PUBLIC_PLACE_LIMIT,
+    PLACES_DEPRECATION_REASON,
+    schema,
+)
 from backend.tokens import issue_token_pair
 
 
@@ -279,6 +284,95 @@ class LegacyPlaceSearchCompatibilityTests(TestCase):
             result["data"]["placesStartwithName"],
             [{"id": str(prefix.pk), "name": "Legacy Alpha"}],
         )
+
+    def test_deprecated_places_field_stays_unbounded_and_public_only(self):
+        places = [
+            self.create_place(f"Everything {index:02d}")
+            for index in range(LEGACY_PUBLIC_PLACE_LIMIT + 5)
+        ]
+        owner = get_user_model().objects.create_user(
+            email="legacy-places-owner@example.test",
+            password="irrelevant-test-password",
+        )
+        Request.objects.create(
+            name="Everything Pending Secret",
+            category=self.category,
+            address=Address.objects.create(
+                addressString="Pending Secret address",
+                location=Point(-77.1, 39.1, srid=4326),
+            ),
+            owner=owner,
+            state=Request.State.PENDING,
+            approved=False,
+        )
+
+        response = self.client.post(
+            "/graphql/",
+            data=json.dumps({"query": "{ places { id name } }"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertNotIn("errors", payload)
+        self.assertEqual(
+            sorted(int(place["id"]) for place in payload["data"]["places"]),
+            [place.pk for place in places],
+        )
+        self.assertNotIn("Pending Secret", str(payload))
+
+    def test_legacy_exact_name_field_keeps_shape_and_cap(self):
+        places = [
+            self.create_place("Duplicate Legacy Name")
+            for _ in range(LEGACY_PUBLIC_PLACE_LIMIT + 5)
+        ]
+
+        result = self.graphql.execute(
+            "query($name: String!) { placesByName(name: $name) { id name } }",
+            variable_values={"name": "Duplicate Legacy Name"},
+        )
+
+        self.assertNotIn("errors", result)
+        self.assertEqual(
+            result["data"]["placesByName"],
+            [
+                {"id": str(place.pk), "name": "Duplicate Legacy Name"}
+                for place in places[:LEGACY_PUBLIC_PLACE_LIMIT]
+            ],
+        )
+
+    def test_only_the_unbounded_places_field_is_deprecated(self):
+        result = self.graphql.execute(
+            """
+            {
+              __type(name: "Query") {
+                fields(includeDeprecated: true) {
+                  name
+                  isDeprecated
+                  deprecationReason
+                }
+              }
+            }
+            """
+        )
+
+        self.assertNotIn("errors", result)
+        fields = {
+            field["name"]: field for field in result["data"]["__type"]["fields"]
+        }
+        self.assertTrue(fields["places"]["isDeprecated"])
+        self.assertEqual(
+            fields["places"]["deprecationReason"], PLACES_DEPRECATION_REASON
+        )
+        self.assertIn("/api/v1/places/search/", PLACES_DEPRECATION_REASON)
+        for name in (
+            "placeById",
+            "placesByName",
+            "placesNames",
+            "placesStartwithName",
+        ):
+            with self.subTest(field=name):
+                self.assertFalse(fields[name]["isDeprecated"])
 
 
 def passing_plan_report():
