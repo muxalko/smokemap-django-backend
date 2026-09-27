@@ -472,7 +472,7 @@ class SubmissionIdempotency(models.Model):
     request_hash = models.CharField(max_length=64, editable=False)
     submission = models.ForeignKey(
         Request,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="idempotency_records",
     )
     media_intent = models.ForeignKey(
@@ -570,7 +570,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
 
     submission = models.ForeignKey(
         Request,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="lifecycle_events",
     )
     actor = models.ForeignKey(
@@ -582,6 +582,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
     )
     system_actor = models.CharField(blank=True, null=True, max_length=64)
     operation = models.CharField(max_length=32, choices=SubmissionOperation.choices)
+    comment = models.TextField(blank=True, null=True, editable=False)
     from_state = models.CharField(
         blank=True,
         null=True,
@@ -594,7 +595,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
         SubmissionIdempotency,
         blank=True,
         null=True,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="lifecycle_event",
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -758,8 +759,8 @@ class Image(models.Model):
     name = models.CharField(max_length=255)
     url = models.CharField(max_length=255)
     metadata = models.JSONField(blank=True, null=True)
-    request = models.ForeignKey(Request, on_delete=models.DO_NOTHING, null=True)
-    place = models.ForeignKey(Place, on_delete=models.DO_NOTHING, null=True)
+    request = models.ForeignKey(Request, on_delete=models.PROTECT, null=True)
+    place = models.ForeignKey(Place, on_delete=models.PROTECT, null=True)
     is_managed = models.BooleanField(default=False, editable=False)
     intent = models.OneToOneField(
         MediaUploadIntent,

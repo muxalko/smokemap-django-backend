@@ -627,7 +627,7 @@ def _replayed_record(actor, operation, key, request_hash, submission):
 
 
 def _record_operation(*, actor, operation, key, request_hash, submission, result,
-                      from_state, to_state):
+                      from_state, to_state, comment=None):
     idempotency = SubmissionIdempotency.objects.create(
         actor=actor,
         operation=operation,
@@ -640,6 +640,7 @@ def _record_operation(*, actor, operation, key, request_hash, submission, result
         submission=submission,
         actor=actor,
         operation=operation,
+        comment=comment,
         from_state=from_state,
         to_state=to_state,
         outcome=SubmissionLifecycleEvent.Outcome.SUCCEEDED,
