@@ -759,6 +759,7 @@ class Place(models.Model):
             GinIndex(
                 OpClass(Lower("name"), name="gin_trgm_ops"),
                 name="place_name_lower_trgm_idx",
+                fastupdate=False,
             ),
         ]
 

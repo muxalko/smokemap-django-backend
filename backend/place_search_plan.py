@@ -141,6 +141,9 @@ def report_failures(report):
     for index_name in (PREFIX_INDEX, TRIGRAM_INDEX):
         if index_name not in report["indexes"]:
             failures.append(f"missing valid search index {index_name}")
+    trigram_definition = report["indexes"].get(TRIGRAM_INDEX)
+    if trigram_definition and "fastupdate=off" not in trigram_definition:
+        failures.append(f"{TRIGRAM_INDEX} must disable the GIN pending list")
     if not set(report["queries"]["prefix"]["used_indexes"]).intersection(
         {PREFIX_INDEX, TRIGRAM_INDEX}
     ):

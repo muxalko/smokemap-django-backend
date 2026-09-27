@@ -38,10 +38,14 @@ class Migration(migrations.Migration):
         migrations.SeparateDatabaseAndState(
             database_operations=[
                 migrations.RunSQL(
+                    # Approved places are written rarely, so skip the GIN
+                    # pending list; unflushed entries make the planner fall
+                    # back to sequential scans until autovacuum runs.
                     sql=(
                         'CREATE INDEX "place_name_lower_trgm_idx" '
                         'ON "backend_place" USING gin '
-                        '((LOWER("name")) gin_trgm_ops)'
+                        '((LOWER("name")) gin_trgm_ops) '
+                        "WITH (fastupdate = off)"
                     ),
                     reverse_sql='DROP INDEX "place_name_lower_trgm_idx"',
                 ),
@@ -55,6 +59,7 @@ class Migration(migrations.Migration):
                             name="gin_trgm_ops",
                         ),
                         name="place_name_lower_trgm_idx",
+                        fastupdate=False,
                     ),
                 ),
             ],

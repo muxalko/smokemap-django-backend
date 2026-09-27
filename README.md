@@ -157,7 +157,12 @@ owners/reviewers, moderation state, or audit data.
 
 PostgreSQL `pg_trgm` is provisioned by migration. An expression B-tree index on
 `lower(name) varchar_pattern_ops` supports normalized prefix candidates and an
-expression GIN `gin_trgm_ops` index supports fuzzy candidates. The deprecated
+expression GIN `gin_trgm_ops` index supports fuzzy candidates. The GIN index is
+created with `fastupdate = off`: public places change only through moderation
+approval, and entries left in the GIN pending list until autovacuum make the
+planner fall back to sequential scans (observed at 20,000 places: roughly
+80 ms sequential versus about 1 ms through a bitmap OR of both indexes). The
+plan inspector fails if this storage parameter is missing. The deprecated
 GraphQL `placesNames` retains its existing shape but is deterministically capped
 at 20; `placesStartwithName` retains prefix-only semantics while applying the
 same normalization and cap. The legacy search client therefore cannot fetch the

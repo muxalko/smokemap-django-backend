@@ -25,6 +25,7 @@ from backend.place_search_plan import (
     benchmark_place_name,
     render_report_text,
     report_failures,
+    search_indexes,
 )
 from backend.schema import LEGACY_PUBLIC_PLACE_LIMIT, schema
 
@@ -251,7 +252,13 @@ def passing_plan_report():
         "failures": [],
         "dataset": {"places": 20_000},
         "planner_settings": {"enable_seqscan": "on"},
-        "indexes": {PREFIX_INDEX: "btree", TRIGRAM_INDEX: "gin"},
+        "indexes": {
+            PREFIX_INDEX: "CREATE INDEX ... USING btree (lower((name)::text) varchar_pattern_ops)",
+            TRIGRAM_INDEX: (
+                "CREATE INDEX ... USING gin (lower((name)::text) gin_trgm_ops) "
+                "WITH (fastupdate=off)"
+            ),
+        },
         "queries": {
             "prefix": {
                 "query": "cedar",
@@ -267,6 +274,15 @@ def passing_plan_report():
             },
         },
     }
+
+
+class PlaceSearchIndexMigrationTests(TestCase):
+    def test_migrated_schema_has_valid_prefix_and_immediate_trigram_indexes(self):
+        indexes = search_indexes()
+
+        self.assertIn("varchar_pattern_ops", indexes[PREFIX_INDEX])
+        self.assertIn("gin_trgm_ops", indexes[TRIGRAM_INDEX])
+        self.assertIn("fastupdate=off", indexes[TRIGRAM_INDEX])
 
 
 class PlaceSearchPlanEvidenceTests(SimpleTestCase):
@@ -288,6 +304,24 @@ class PlaceSearchPlanEvidenceTests(SimpleTestCase):
         self.assertIn("enable_seqscan must remain on for natural plans", failures)
         self.assertIn("prefix plan did not use a place-search index", failures)
         self.assertIn("fuzzy plan did not use the trigram index", failures)
+
+    def test_plan_contract_requires_trigram_index_without_pending_list(self):
+        report = passing_plan_report()
+        report["indexes"][TRIGRAM_INDEX] = (
+            "CREATE INDEX ... USING gin (lower((name)::text) gin_trgm_ops)"
+        )
+
+        self.assertEqual(
+            report_failures(report),
+            [f"{TRIGRAM_INDEX} must disable the GIN pending list"],
+        )
+
+        del report["indexes"][TRIGRAM_INDEX]
+
+        self.assertEqual(
+            report_failures(report),
+            [f"missing valid search index {TRIGRAM_INDEX}"],
+        )
 
     def test_text_report_records_queries_indexes_and_timings(self):
         report = passing_plan_report()
