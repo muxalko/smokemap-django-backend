@@ -44,6 +44,7 @@ class PlaceSearchInputTests(SimpleTestCase):
             (" \t ", "at least 2"),
             ("a", "at least 2"),
             ("x" * (SEARCH_QUERY_MAX_LENGTH + 1), "at most 100"),
+            ("ab\x00", "null characters"),
         )
         for query, message in cases:
             with self.subTest(query=query):
@@ -85,6 +86,7 @@ class PlaceSearchApiTests(TestCase):
             ({"q": " "}, "at least 2"),
             ({"q": "a"}, "at least 2"),
             ({"q": "x" * 101}, "at most 100"),
+            ({"q": "\x00\x00"}, "null characters"),
             ({"q": "valid", "limit": "0"}, "limit"),
             ({"q": "valid", "limit": "21"}, "limit"),
             ({"q": "valid", "limit": "all"}, "limit"),

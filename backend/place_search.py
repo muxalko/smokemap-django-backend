@@ -25,6 +25,9 @@ class PlaceSearchInputError(ValueError):
 def normalize_search_query(raw_query):
     if raw_query is None:
         raise PlaceSearchInputError("q is required")
+    # PostgreSQL text cannot store NUL, so reject it before any database call.
+    if "\x00" in raw_query:
+        raise PlaceSearchInputError("q must not contain null characters")
 
     normalized = " ".join(unicodedata.normalize("NFKC", raw_query).split()).lower()
     if len(normalized) < SEARCH_QUERY_MIN_LENGTH:

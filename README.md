@@ -137,7 +137,8 @@ GET /api/v1/places/search/?q=alpha%20lounge&limit=10
 
 `q` is required. The backend applies Unicode NFKC normalization, collapses and
 trims whitespace, and lowercases the query before validating its inclusive
-2-to-100-character range. `limit` defaults to 10 and must be an integer from 1
+2-to-100-character range; a query containing a NUL character is rejected.
+`limit` defaults to 10 and must be an integer from 1
 through the hard maximum of 20. Invalid input returns HTTP 400 with the stable
 `invalid_search` code. No-match input succeeds with an empty `results` list.
 
