@@ -421,10 +421,12 @@ class Query(graphene.ObjectType):
 
     def resolve_requests(root, info):
         user = require_active_user(info)
+        moderator = is_moderator(user)
         requests = request_queryset_with_tags(
-            Request.objects.exclude(state=Request.State.APPROVED)
+            Request.objects.exclude(state=Request.State.APPROVED),
+            include_attachments=moderator,
         )
-        if is_moderator(user):
+        if moderator:
             return requests.filter(
                 Q(owner=user) | Q(state=Request.State.PENDING)
             )

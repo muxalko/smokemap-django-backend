@@ -31,6 +31,25 @@ QUEUE_QUERY = """
     }
 """
 
+MODERATOR_REQUESTS_QUERY = """
+    query {
+      requests {
+        id
+        state
+        attachments { id position }
+      }
+    }
+"""
+
+REQUESTS_TO_APPROVE_QUERY = """
+    query {
+      requestsToApprove {
+        id
+        attachments { id position }
+      }
+    }
+"""
+
 
 class ModerationQueueGraphQLTests(SubmissionFixtureMixin, TestCase):
     def setUp(self):
@@ -203,6 +222,101 @@ class ModerationQueueGraphQLTests(SubmissionFixtureMixin, TestCase):
         all_ids = {item["id"] for item in first["items"] + second["items"]}
         self.assertNotIn(str(rows[2].pk), all_ids)
         self.assertNotIn(str(draft.pk), all_ids)
+
+    def test_moderator_requests_prefetch_attachments_once_and_preserve_state_visibility(self):
+        pending = self.create_submissions(3)
+        expected_attachments = {}
+        for submission in pending:
+            _intent, attachment = self.attach_managed_image(
+                submission,
+                0,
+                owner=self.owner,
+            )
+            expected_attachments[str(submission.pk)] = [
+                {"id": str(attachment.pk), "position": 0}
+            ]
+
+        Image.objects.create(
+            set_id="legacy",
+            name="legacy.png",
+            url="https://public.invalid/legacy.png",
+            request=pending[0],
+        )
+        own_draft = self.create_submissions(1, state=Request.State.DRAFT)[0]
+        own_draft.owner = self.moderator
+        own_draft.save(update_fields=["owner"])
+        self.attach_managed_image(own_draft, 0, owner=self.moderator)
+        hidden_draft = self.create_submissions(1, state=Request.State.DRAFT)[0]
+        self.attach_managed_image(hidden_draft, 0, owner=self.owner)
+
+        with CaptureQueriesContext(connection) as captured:
+            result = self.graphql.execute(
+                MODERATOR_REQUESTS_QUERY,
+                context_value=self.context(self.moderator),
+            )
+
+        self.assertNotIn("errors", result)
+        items = {item["id"]: item for item in result["data"]["requests"]}
+        self.assertEqual(set(items), {*expected_attachments, str(own_draft.pk)})
+        for submission_id, attachments in expected_attachments.items():
+            self.assertEqual(items[submission_id]["state"], Request.State.PENDING)
+            self.assertEqual(items[submission_id]["attachments"], attachments)
+        self.assertEqual(items[str(own_draft.pk)]["state"], Request.State.DRAFT)
+        self.assertEqual(items[str(own_draft.pk)]["attachments"], [])
+        self.assertNotIn(str(hidden_draft.pk), items)
+
+        image_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "backend_image"' in query["sql"]
+        ]
+        self.assertEqual(len(image_queries), 1)
+        self.assertIn('"backend_image"."is_managed"', image_queries[0])
+        self.assertIn('"backend_image"."state"', image_queries[0])
+
+    def test_requests_to_approve_prefetches_only_pending_managed_attachments_once(self):
+        pending = self.create_submissions(3)
+        expected_attachments = {}
+        for submission in pending:
+            _intent, attachment = self.attach_managed_image(
+                submission,
+                0,
+                owner=self.owner,
+            )
+            expected_attachments[str(submission.pk)] = [
+                {"id": str(attachment.pk), "position": 0}
+            ]
+
+        Image.objects.create(
+            set_id="legacy",
+            name="legacy.png",
+            url="https://public.invalid/legacy.png",
+            request=pending[0],
+        )
+        draft = self.create_submissions(1, state=Request.State.DRAFT)[0]
+        self.attach_managed_image(draft, 0, owner=self.owner)
+
+        with CaptureQueriesContext(connection) as captured:
+            result = self.graphql.execute(
+                REQUESTS_TO_APPROVE_QUERY,
+                context_value=self.context(self.moderator),
+            )
+
+        self.assertNotIn("errors", result)
+        items = {item["id"]: item for item in result["data"]["requestsToApprove"]}
+        self.assertEqual(set(items), set(expected_attachments))
+        for submission_id, attachments in expected_attachments.items():
+            self.assertEqual(items[submission_id]["attachments"], attachments)
+        self.assertNotIn(str(draft.pk), items)
+
+        image_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "backend_image"' in query["sql"]
+        ]
+        self.assertEqual(len(image_queries), 1)
+        self.assertIn('"backend_image"."is_managed"', image_queries[0])
+        self.assertIn('"backend_image"."state"', image_queries[0])
 
     def test_queue_schema_does_not_expose_private_media_storage(self):
         pending, second_pending = self.create_submissions(2)
