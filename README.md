@@ -125,6 +125,62 @@ therefore cannot publish vocabulary or leave partial place/tag state. Public
 tag objects expose only `id` and `name`; canonical keys and moderation
 visibility are internal fields.
 
+## Bounded place search API
+
+The public autocomplete contract searches only `Place`, the approved public
+projection produced by moderation. Submission `Request` rows in draft, pending,
+rejected, withdrawn, or expired states are never part of the query.
+
+```text
+GET /api/v1/places/search/?q=alpha%20lounge&limit=10
+```
+
+`q` is required. The backend applies Unicode NFKC normalization, collapses and
+trims whitespace, and lowercases the query before validating its inclusive
+2-to-100-character range. `limit` defaults to 10 and must be an integer from 1
+through the hard maximum of 20. Invalid input returns HTTP 400 with the stable
+`invalid_search` code. No-match input succeeds with an empty `results` list.
+
+Matching and ranking happen in PostgreSQL. Case-insensitive normalized prefix
+matches sort before fuzzy matches. Within each tier, trigram similarity sorts
+descending, followed by normalized name and numeric place ID for a completely
+deterministic order. Fuzzy inclusion uses a request-local similarity threshold
+of `0.3`; it does not depend on mutable pooled-connection state. The query is
+sliced to the requested limit before evaluation and uses `select_related` for
+its address and category context.
+
+Each result contains only `id`, `name`, a nullable address label, GeoJSON point
+`location`, category `{id, slug, name}`, and `match` (`prefix` or `fuzzy`). The
+endpoint is anonymous read-only and returns the same public projection to every
+role. It does not expose descriptions, websites, tags, images, submission
+owners/reviewers, moderation state, or audit data.
+
+PostgreSQL `pg_trgm` is provisioned by migration. An expression B-tree index on
+`lower(name) varchar_pattern_ops` supports normalized prefix candidates and an
+expression GIN `gin_trgm_ops` index supports fuzzy candidates. The deprecated
+GraphQL `placesNames` retains its existing shape but is deterministically capped
+at 20; `placesStartwithName` retains prefix-only semantics while applying the
+same normalization and cap. The legacy search client therefore cannot fetch the
+complete place-name collection.
+
+Inspect both natural query plans against a deterministic 20,000-place corpus:
+
+```sh
+docker compose --project-directory ../smokemap \
+  --file ../smokemap/docker-compose.yaml \
+  run --rm -T --build --volume "$PWD:/app" backend \
+  python manage.py inspect_place_search_plans \
+    --output-dir /app/place-search-plan-evidence
+```
+
+The DEBUG-only inspector leaves `enable_seqscan` on, never overrides a planner
+setting, executes the real limited ORM search with `EXPLAIN (ANALYZE, BUFFERS,
+FORMAT JSON)`, and fails unless the prefix plan uses a search index and the
+fuzzy plan uses `place_name_lower_trgm_idx`. Its fixture is transactional and
+rolled back; it refreshes table statistics after rollback. The optional output
+contains the full plans, actual index names, planning/execution timings, and a
+canonical text summary.
+
 ## Viewport place API
 
 The public, read-only map contract is:

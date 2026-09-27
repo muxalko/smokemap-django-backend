@@ -103,3 +103,35 @@ class ViewportPlaceSerializer(gis_serializers.GeoFeatureModelSerializer):
             "tags",
             "website",
         )
+
+
+class PlaceSearchResultSerializer(rest_serializers.ModelSerializer):
+    id = rest_serializers.IntegerField(read_only=True)
+    address = rest_serializers.CharField(
+        source="address.addressString",
+        allow_null=True,
+        read_only=True,
+    )
+    location = rest_serializers.SerializerMethodField()
+    category = rest_serializers.SerializerMethodField()
+    match = rest_serializers.SerializerMethodField()
+
+    def get_location(self, obj):
+        return {
+            "type": "Point",
+            "coordinates": [obj.address.location.x, obj.address.location.y],
+        }
+
+    def get_category(self, obj):
+        return {
+            "id": obj.category_id,
+            "slug": obj.category.slug,
+            "name": obj.category.name,
+        }
+
+    def get_match(self, obj):
+        return "prefix" if obj.match_rank == 0 else "fuzzy"
+
+    class Meta:
+        model = Place
+        fields = ("id", "name", "address", "location", "category", "match")

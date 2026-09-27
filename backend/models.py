@@ -2,7 +2,9 @@ import uuid
 
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models
+from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.db.models import F, Value
+from django.db.models.functions import Lower
 from django.db.models.lookups import LessThanOrEqual
 from django.utils import timezone
 from django.conf import settings
@@ -749,6 +751,16 @@ class Place(models.Model):
     website = models.CharField(max_length=255, null=True)
     class Meta:
         verbose_name_plural = 'Places'
+        indexes = [
+            models.Index(
+                OpClass(Lower("name"), name="varchar_pattern_ops"),
+                name="place_name_lower_prefix_idx",
+            ),
+            GinIndex(
+                OpClass(Lower("name"), name="gin_trgm_ops"),
+                name="place_name_lower_trgm_idx",
+            ),
+        ]
 
     def __str__(self):
         return "{}".format(self.name)
