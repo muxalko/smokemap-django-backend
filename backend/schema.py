@@ -185,6 +185,13 @@ class ManagedMediaAttachmentType(DjangoObjectType):
         return str(self.intent_id)
 
 
+class ModerationMediaAttachmentV4(graphene.ObjectType):
+    """Minimum safe identity needed to preview one queued attachment."""
+
+    id = graphene.ID(required=True)
+    position = graphene.Int(required=True)
+
+
 class MediaUploadAuthorization(graphene.ObjectType):
     url = graphene.String(required=True)
     fields = GenericScalar(required=True)
@@ -214,6 +221,14 @@ class AddressType(graphql_geojson.GeoJSONType):
 class RequestType(DjangoObjectType):
     state = graphene.String(required=True)
     tags = graphene.List(graphene.NonNull(graphene.String), required=True)
+    attachments = graphene.List(
+        graphene.NonNull(ModerationMediaAttachmentV4),
+        required=True,
+        description=(
+            "Pending managed attachment identities in display order. Use each ID "
+            "with mediaAttachmentPreviewV3; storage metadata is never exposed."
+        ),
+    )
     approved_by = graphene.String(
         description="Deprecated compatibility field containing the reviewer ID."
     )
@@ -232,6 +247,20 @@ class RequestType(DjangoObjectType):
 
     def resolve_tags(self, info):
         return [request_tag.display for request_tag in self.request_tags.all()]
+
+    def resolve_attachments(self, info):
+        actor = require_active_user(info)
+        if self.state != Request.State.PENDING:
+            return []
+        if self.owner_id != actor.pk and not is_moderator(actor):
+            graphql_authorization_error("Submission not found", NOT_FOUND)
+        prefetched = getattr(self, "_moderation_attachments", None)
+        if prefetched is not None:
+            return prefetched
+        return self.image_set.filter(
+            is_managed=True,
+            state="attached",
+        ).order_by("position", "pk")
 
     class Meta:
         model = Request
@@ -282,13 +311,25 @@ class AuthenticationRequired(graphene.ObjectType):
         )
 
 
-def request_queryset_with_tags(queryset):
-    return queryset.prefetch_related(
+def request_queryset_with_tags(queryset, *, include_attachments=False):
+    prefetches = [
         Prefetch(
             "request_tags",
             queryset=RequestTag.objects.select_related("tag").order_by("position"),
         )
-    )
+    ]
+    if include_attachments:
+        prefetches.append(
+            Prefetch(
+                "image_set",
+                queryset=Image.objects.filter(
+                    is_managed=True,
+                    state="attached",
+                ).order_by("position", "pk"),
+                to_attr="_moderation_attachments",
+            )
+        )
+    return queryset.prefetch_related(*prefetches)
 
 
 #################################QUERIES###############################
@@ -380,10 +421,12 @@ class Query(graphene.ObjectType):
 
     def resolve_requests(root, info):
         user = require_active_user(info)
+        moderator = is_moderator(user)
         requests = request_queryset_with_tags(
-            Request.objects.exclude(state=Request.State.APPROVED)
+            Request.objects.exclude(state=Request.State.APPROVED),
+            include_attachments=moderator,
         )
-        if is_moderator(user):
+        if moderator:
             return requests.filter(
                 Q(owner=user) | Q(state=Request.State.PENDING)
             )
@@ -393,7 +436,8 @@ class Query(graphene.ObjectType):
     def resolve_requests_to_approve(root, info, **kwargs):
         require_moderator(info)
         return request_queryset_with_tags(
-            pending_moderation_queryset()
+            pending_moderation_queryset(),
+            include_attachments=True,
         ).order_by("date_created", "pk")[:LEGACY_PAGE_SIZE]
 
     def resolve_moderation_queue_v4(root, info, first=None, after=None):
@@ -403,7 +447,8 @@ class Query(graphene.ObjectType):
                 first=first,
                 after=after,
                 queryset=request_queryset_with_tags(
-                    pending_moderation_queryset()
+                    pending_moderation_queryset(),
+                    include_attachments=True,
                 ),
             )
         except ModerationQueueInputError as error:
