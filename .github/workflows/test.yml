@@ -56,7 +56,7 @@ jobs:
         run: |
           output_file="$(mktemp)"
           if ! python manage.py test 2>&1 | tee "$output_file"; then
-            message="$(tail -n 60 "$output_file" | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            message="$(tail -n 15 "$output_file" | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
             echo "::error title=Backend test failure::$message"
             exit 1
           fi
@@ -65,7 +65,7 @@ jobs:
         run: |
           output_file="$(mktemp)"
           if ! python manage.py inspect_place_search_plans 2>&1 | tee "$output_file"; then
-            message="$(tail -n 60 "$output_file" | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            message="$(tail -n 15 "$output_file" | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
             echo "::error title=Place-search plan failure::$message"
             exit 1
 
