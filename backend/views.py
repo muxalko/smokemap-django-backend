@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from backend.serializers import (
     AddressSerializer,
     LocationSerializer,
+    PlaceSearchResultSerializer,
     PlaceSerializer,
     ViewportPlaceSerializer,
 )
@@ -20,6 +21,12 @@ from backend.moderation import hard_delete_place
 from backend.submissions import SubmissionOperationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework_gis.filters import InBBoxFilter
+from backend.place_search import (
+    PlaceSearchInputError,
+    normalize_search_query,
+    parse_search_limit,
+    search_places,
+)
 
 
 VIEWPORT_MAX_SPAN_DEGREES = 10
@@ -145,6 +152,28 @@ class ViewportPlaceView(APIView):
             )
 
         return Response(payload)
+
+
+class PlaceSearchView(APIView):
+    """Bounded public autocomplete over the approved Place projection."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        try:
+            normalized_query = normalize_search_query(request.query_params.get("q"))
+            limit = parse_search_limit(request.query_params.get("limit"))
+        except PlaceSearchInputError as error:
+            return Response({"code": error.code, "detail": str(error)}, status=400)
+
+        places = search_places(normalized_query, limit=limit)
+        return Response(
+            {
+                "query": normalized_query,
+                "limit": limit,
+                "results": PlaceSearchResultSerializer(places, many=True).data,
+            }
+        )
 
 class LocationViewSet(mixins.RetrieveModelMixin,
                     mixins.ListModelMixin,

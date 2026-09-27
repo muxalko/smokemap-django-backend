@@ -529,6 +529,7 @@ INSTALLED_APPS += [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles", # Required for GraphiQL
+    "django.contrib.postgres", # PostgreSQL lookups and index integrations
     "corsheaders", # CORS support
     "graphene_django", # graphql
     # Retained for compatibility with databases that already applied the

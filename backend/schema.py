@@ -28,6 +28,7 @@ from .permissions import (
 from django.contrib.auth import authenticate
 import graphql_geojson
 from django.db.models import Prefetch, Q
+from django.db.models.functions import Lower
 from .submissions import (
     IdempotencyConflict,
     SubmissionInputError,
@@ -64,6 +65,10 @@ from .moderation_queue import (
     moderation_queue_page,
     pending_moderation_queryset,
 )
+from .place_search import (
+    PlaceSearchInputError,
+    normalize_search_query,
+)
 from .tokens import (
     INVALID_TOKEN,
     TokenLifecycleError,
@@ -77,6 +82,8 @@ from .tokens import (
 
 import logging
 logger = logging.getLogger( __name__ )
+
+LEGACY_PUBLIC_PLACE_LIMIT = 20
 
 ##################################TYPES###############################
 class UserType(DjangoObjectType):
@@ -503,20 +510,28 @@ class Query(graphene.ObjectType):
         return Place.objects.all()
     
     def resolve_places_names(root, info):
-        # Querying a list
-        return Place.objects.all().values_list("name", flat=True)
+        # Deprecated compatibility surface for the old client-side search.
+        return Place.objects.order_by(Lower("name"), "pk").values_list(
+            "name", flat=True
+        )[:LEGACY_PUBLIC_PLACE_LIMIT]
     
     def resolve_place_by_id(root, info, id):
         # Querying a list
         return Place.objects.get(pk=id)
     
     def resolve_places_by_name(root, info, name):
-        # Querying a list
-        return Place.objects.filter(name=name)
+        return Place.objects.filter(name=name).order_by("pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
     
     def resolve_places_startWith_name(root, info, name):
-        # Querying a list
-        return Place.objects.filter(name__startswith=name)
+        try:
+            normalized_query = normalize_search_query(name)
+        except PlaceSearchInputError as error:
+            raise GraphQLError(str(error), extensions={"code": error.code}) from error
+        return (
+            Place.objects.annotate(normalized_name=Lower("name"))
+            .filter(normalized_name__startswith=normalized_query)
+            .order_by("normalized_name", "pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
+        )
     
     def resolve_s3_presigned_url(root, info):
         graphql_authorization_error(
