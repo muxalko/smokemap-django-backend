@@ -166,34 +166,48 @@ created with `fastupdate = off`: public places change only through moderation
 approval, and entries left in the GIN pending list until autovacuum make the
 planner fall back to sequential scans (observed at 20,000 places: roughly
 80 ms sequential versus about 1 ms through a bitmap OR of both indexes). The
-plan inspector fails if this storage parameter is missing. The deprecated
-GraphQL `placesNames` retains its existing shape but is deterministically capped
-at 20; `placesStartwithName` retains prefix-only semantics while applying the
-same normalization and cap. The legacy search client therefore cannot fetch the
-complete place-name collection.
+plan inspector fails if this storage parameter is missing. The legacy GraphQL
+autocomplete field `placesNames` retains its existing shape but is
+deterministically capped at 20; `placesStartwithName` retains prefix-only
+semantics while applying the same normalization and cap. The search and
+autocomplete surfaces therefore cannot fetch the complete place-name
+collection. This guarantee covers search and autocomplete only. The legacy
+public listing surfaces described below are not search surfaces and remain
+unbounded.
 
-### Legacy GraphQL place reads
+### Search surfaces versus legacy public listings
 
-These public GraphQL fields keep their response shapes until the frontend search
-migration ([smokemap-webapp#10](https://github.com/muxalko/smokemap-webapp/issues/10))
-lands:
+The M4 exit criterion "search never retrieves the full place-name collection"
+applies to the search and autocomplete surfaces. The legacy public listing
+surfaces are a separate contract. They are unbounded but return only approved
+`Place` rows, never submission `Request` rows. They return the same result to
+guests and to every role, and they are read-only for guests and
+non-administrators. Their shape and cardinality stay unchanged until the
+frontend search migration
+([smokemap-webapp#10](https://github.com/muxalko/smokemap-webapp/issues/10))
+lands.
 
-| Field | Current behavior | Status |
-| --- | --- | --- |
-| `places` | Every `Place`, unbounded | Deprecated |
-| `placesNames` | First 20 names by lowercased name, then ID | Legacy, capped |
-| `placesByName(name)` | First 20 exact-name matches by ID | Legacy, capped |
-| `placesStartwithName(name)` | First 20 normalized prefix matches | Legacy, capped |
-| `placeById(id)` | One `Place` | Supported |
+| Surface | Kind | Current behavior | Status |
+| --- | --- | --- | --- |
+| `GET /api/v1/places/search/` | Search | Ranked, at most 20 results | Supported |
+| GraphQL `placesNames` | Autocomplete | First 20 names by lowercased name, then ID | Legacy, capped |
+| GraphQL `placesStartwithName(name)` | Autocomplete | First 20 normalized prefix matches | Legacy, capped |
+| GraphQL `placesByName(name)` | Lookup | First 20 exact-name matches by ID | Legacy, capped |
+| GraphQL `placeById(id)` | Lookup | One `Place` | Supported |
+| GraphQL `places` | Listing | Every approved `Place`, unbounded | Deprecated |
+| `GET /places/` (optional `in_bbox`) | Listing | Every approved `Place` in the box, or every one without it; unbounded, unpaginated GeoJSON | Legacy |
 
-The unbounded `places` field is deprecated in the schema, but it still returns
-every approved `Place` and never returns submission `Request` rows. The current
-frontend does not select it. New clients should use
-`GET /api/v1/places/search/` for name search and `GET /api/v1/places/` for
-viewport reads. `places` can only be bounded or removed once the frontend search
-migration has shipped and no supported client selects it. The same condition
-applies before `placesNames` and `placesStartwithName` are formally deprecated.
-Tests in `backend/test_place_search.py` pin this behavior.
+The GraphQL schema exposes no mutation that writes `Place` directly. `/places/`
+accepts writes only from an administrator. Guests receive HTTP 401 and
+authenticated non-administrators, including moderators, receive HTTP 403.
+
+The `places` field is deprecated in the schema, and its `deprecationReason`
+points to `GET /api/v1/places/search/` for name search and
+`GET /api/v1/places/` for viewport reads. The current frontend does not select
+it. `places` and `/places/` can be bounded or removed only after the frontend
+search migration has shipped and no supported client depends on them.
+`placesNames` and `placesStartwithName` are formally deprecated under the same
+condition. `backend/test_place_search.py` pins all of this behavior.
 
 Inspect both natural query plans against a deterministic 20,000-place corpus:
 

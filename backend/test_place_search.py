@@ -9,6 +9,7 @@ from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphene.test import Client as GraphQLClient
+from rest_framework.test import APIClient
 
 from backend.models import Address, Category, Place, Request
 from backend.place_search import (
@@ -285,41 +286,50 @@ class LegacyPlaceSearchCompatibilityTests(TestCase):
             [{"id": str(prefix.pk), "name": "Legacy Alpha"}],
         )
 
-    def test_deprecated_places_field_stays_unbounded_and_public_only(self):
+    def test_deprecated_places_field_stays_unbounded_and_approved_only(self):
         places = [
             self.create_place(f"Everything {index:02d}")
             for index in range(LEGACY_PUBLIC_PLACE_LIMIT + 5)
         ]
-        owner = get_user_model().objects.create_user(
-            email="legacy-places-owner@example.test",
-            password="irrelevant-test-password",
-        )
-        Request.objects.create(
-            name="Everything Pending Secret",
-            category=self.category,
-            address=Address.objects.create(
-                addressString="Pending Secret address",
-                location=Point(-77.1, 39.1, srid=4326),
-            ),
-            owner=owner,
-            state=Request.State.PENDING,
-            approved=False,
-        )
+        accounts = create_role_accounts("legacy-graphql")
+        create_pending_request(self.category, accounts["user"])
 
-        response = self.client.post(
+        anonymous = self.client.post(
             "/graphql/",
             data=json.dumps({"query": "{ places { id name } }"}),
             content_type="application/json",
         )
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
+        self.assertEqual(anonymous.status_code, 200)
+        payload = anonymous.json()
         self.assertNotIn("errors", payload)
         self.assertEqual(
             sorted(int(place["id"]) for place in payload["data"]["places"]),
             [place.pk for place in places],
         )
         self.assertNotIn("Pending Secret", str(payload))
+        for role, account in accounts.items():
+            with self.subTest(role=role):
+                response = self.client.post(
+                    "/graphql/",
+                    data=json.dumps({"query": "{ places { id name } }"}),
+                    content_type="application/json",
+                    HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(account)['token']}",
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), payload)
+
+    def test_graphql_exposes_no_direct_place_write_mutation(self):
+        result = self.graphql.execute(
+            '{ __type(name: "Mutation") { fields { name } } }'
+        )
+
+        self.assertNotIn("errors", result)
+        names = [field["name"] for field in result["data"]["__type"]["fields"]]
+        self.assertEqual(
+            [name for name in names if "place" in name.lower()],
+            [],
+        )
 
     def test_legacy_exact_name_field_keeps_shape_and_cap(self):
         places = [
@@ -373,6 +383,126 @@ class LegacyPlaceSearchCompatibilityTests(TestCase):
         ):
             with self.subTest(field=name):
                 self.assertFalse(fields[name]["isDeprecated"])
+
+
+class LegacyRestPlaceListingTests(TestCase):
+    """Pin the legacy public `/places/` listing, which is not a search surface."""
+
+    def setUp(self):
+        self.category = Category.objects.get(slug="outdoors")
+        self.accounts = create_role_accounts("legacy-rest")
+        self.places = [
+            Place.objects.create(
+                name=f"Listed {index:02d}",
+                category=self.category,
+                address=Address.objects.create(
+                    addressString=f"Listed {index:02d} address",
+                    location=Point(-77.0, 39.0, srid=4326),
+                ),
+            )
+            for index in range(LEGACY_PUBLIC_PLACE_LIMIT + 5)
+        ]
+        create_pending_request(self.category, self.accounts["user"])
+
+    def get(self, path, account=None, **params):
+        headers = {}
+        if account is not None:
+            headers["HTTP_AUTHORIZATION"] = (
+                f"Bearer {issue_token_pair(account)['token']}"
+            )
+        return self.client.get(path, params, **headers)
+
+    def test_listing_stays_unbounded_approved_only_and_role_independent(self):
+        anonymous = self.get("/places/")
+
+        self.assertEqual(anonymous.status_code, 200)
+        payload = anonymous.json()
+        self.assertEqual(payload["type"], "FeatureCollection")
+        self.assertEqual(
+            sorted(
+                feature["properties"]["place_id"] for feature in payload["features"]
+            ),
+            [place.pk for place in self.places],
+        )
+        self.assertNotIn("Pending Secret", str(payload))
+        for role, account in self.accounts.items():
+            with self.subTest(role=role):
+                response = self.get("/places/", account)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), payload)
+
+    def test_bbox_listing_and_detail_exclude_submission_rows(self):
+        in_bbox = self.get("/places/", in_bbox="-77.05,38.95,-76.95,39.05")
+        detail = self.get(f"/places/{self.places[0].pk}/")
+
+        self.assertEqual(in_bbox.status_code, 200)
+        self.assertEqual(
+            len(in_bbox.json()["features"]), LEGACY_PUBLIC_PLACE_LIMIT + 5
+        )
+        self.assertNotIn("Pending Secret", str(in_bbox.json()))
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(
+            detail.json()["properties"]["place_id"], self.places[0].pk
+        )
+
+    def test_guest_and_non_administrator_writes_are_denied(self):
+        place = self.places[0]
+        body = {"name": "Overwritten", "category": self.category.pk}
+        writes = (
+            ("post", "/places/"),
+            ("put", f"/places/{place.pk}/"),
+            ("patch", f"/places/{place.pk}/"),
+            ("delete", f"/places/{place.pk}/"),
+        )
+        for role, status in ((None, 401), ("user", 403), ("moderator", 403)):
+            client = APIClient()
+            if role is not None:
+                client.credentials(
+                    HTTP_AUTHORIZATION=(
+                        f"Bearer {issue_token_pair(self.accounts[role])['token']}"
+                    )
+                )
+            for method, path in writes:
+                with self.subTest(role=role or "guest", method=method):
+                    response = getattr(client, method)(path, body, format="json")
+                    self.assertEqual(response.status_code, status)
+
+        place.refresh_from_db()
+        self.assertEqual(place.name, "Listed 00")
+        self.assertEqual(Place.objects.count(), LEGACY_PUBLIC_PLACE_LIMIT + 5)
+
+
+def create_role_accounts(prefix):
+    User = get_user_model()
+    return {
+        "user": User.objects.create_user(
+            email=f"{prefix}-user@example.test",
+            password="irrelevant-test-password",
+        ),
+        "moderator": User.objects.create_user(
+            email=f"{prefix}-moderator@example.test",
+            password="irrelevant-test-password",
+            is_staff=True,
+        ),
+        "administrator": User.objects.create_superuser(
+            email=f"{prefix}-administrator@example.test",
+            password="irrelevant-test-password",
+        ),
+    }
+
+
+def create_pending_request(category, owner):
+    return Request.objects.create(
+        name="Everything Pending Secret",
+        category=category,
+        address=Address.objects.create(
+            addressString="Pending Secret address",
+            location=Point(-77.01, 39.01, srid=4326),
+        ),
+        owner=owner,
+        state=Request.State.PENDING,
+        approved=False,
+    )
 
 
 def passing_plan_report():
