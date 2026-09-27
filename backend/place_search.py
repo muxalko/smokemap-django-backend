@@ -50,16 +50,20 @@ def parse_search_limit(raw_limit):
     return limit
 
 
-def place_search_queryset(normalized_query):
-    """Build the ranked public-place query without evaluating it."""
+def place_search_queryset(normalized_query, *, fuzzy=True):
+    """Build the ranked public-place query without evaluating it.
+
+    Without extractable trigrams the fuzzy predicate cannot match anything and
+    would force a sequential scan, so such queries search prefixes only.
+    """
     normalized_name = Lower("name")
+    candidates = Q(normalized_name__startswith=normalized_query)
+    if fuzzy:
+        candidates |= Q(normalized_name__trigram_similar=normalized_query)
     queryset = Place.objects.annotate(
         normalized_name=normalized_name,
         similarity=TrigramSimilarity(normalized_name, Value(normalized_query)),
-    ).filter(
-        Q(normalized_name__startswith=normalized_query)
-        | Q(normalized_name__trigram_similar=normalized_query)
-    )
+    ).filter(candidates)
     return (
         queryset.annotate(
             match_rank=Case(
@@ -73,27 +77,31 @@ def place_search_queryset(normalized_query):
     )
 
 
+def _configure_search_transaction(normalized_query):
+    """Set the transaction-local fuzzy threshold and report whether pg_trgm
+    extracts any trigram from the query (punctuation-only queries yield none)."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT set_config('pg_trgm.similarity_threshold', %s, true), "
+            "cardinality(show_trgm(%s)) > 0",
+            [str(SEARCH_FUZZY_THRESHOLD), normalized_query],
+        )
+        return cursor.fetchone()[1]
+
+
 def search_places(normalized_query, *, limit):
     """Evaluate a bounded query with an explicit, request-local fuzzy threshold."""
     with transaction.atomic():
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT set_config('pg_trgm.similarity_threshold', %s, true)",
-                [str(SEARCH_FUZZY_THRESHOLD)],
-            )
-        return list(place_search_queryset(normalized_query)[:limit])
+        fuzzy = _configure_search_transaction(normalized_query)
+        return list(place_search_queryset(normalized_query, fuzzy=fuzzy)[:limit])
 
 
 def explain_place_search(normalized_query, *, limit=SEARCH_RESULT_LIMIT):
     """Capture the actual bounded ORM query's natural PostgreSQL plan."""
     with transaction.atomic():
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT set_config('pg_trgm.similarity_threshold', %s, true)",
-                [str(SEARCH_FUZZY_THRESHOLD)],
-            )
+        fuzzy = _configure_search_transaction(normalized_query)
         return json.loads(
-            place_search_queryset(normalized_query)[:limit].explain(
+            place_search_queryset(normalized_query, fuzzy=fuzzy)[:limit].explain(
                 analyze=True,
                 buffers=True,
                 format="json",

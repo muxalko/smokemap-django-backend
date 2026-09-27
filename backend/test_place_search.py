@@ -28,6 +28,7 @@ from backend.place_search_plan import (
     search_indexes,
 )
 from backend.schema import LEGACY_PUBLIC_PLACE_LIMIT, schema
+from backend.tokens import issue_token_pair
 
 
 class PlaceSearchInputTests(SimpleTestCase):
@@ -169,11 +170,22 @@ class PlaceSearchApiTests(TestCase):
         data_queries = [sql for sql in statements if 'FROM "backend_place"' in sql]
         self.assertEqual(len(data_queries), 1)
         self.assertIn("LIMIT 20", data_queries[0])
+        self.assertIn(" % ", data_queries[0])
 
     def test_pending_submission_is_not_visible_and_public_results_ignore_role(self):
         visible = self.create_place("Shared Public Place")
-        user = get_user_model().objects.create_user(
+        User = get_user_model()
+        user = User.objects.create_user(
             email="searcher@example.test",
+            password="irrelevant-test-password",
+        )
+        moderator = User.objects.create_user(
+            email="search-moderator@example.test",
+            password="irrelevant-test-password",
+            is_staff=True,
+        )
+        administrator = User.objects.create_superuser(
+            email="search-administrator@example.test",
             password="irrelevant-test-password",
         )
         pending_address = Address.objects.create(
@@ -190,15 +202,37 @@ class PlaceSearchApiTests(TestCase):
         )
 
         anonymous = self.client.get(self.endpoint, {"q": "shared"}).json()
-        self.client.force_login(user)
-        authenticated = self.client.get(self.endpoint, {"q": "shared"}).json()
-
-        self.assertEqual(anonymous, authenticated)
+        for account in (user, moderator, administrator):
+            with self.subTest(account=account.email):
+                response = self.client.get(
+                    self.endpoint,
+                    {"q": "shared"},
+                    HTTP_AUTHORIZATION=f"Bearer {issue_token_pair(account)['token']}",
+                )
+                self.assertEqual(response.wsgi_request.user, account)
+                self.assertEqual(response.json(), anonymous)
         self.assertEqual(
             [result["id"] for result in anonymous["results"]],
             [visible.pk],
         )
         self.assertNotIn("Pending Secret", str(anonymous))
+
+    def test_query_without_trigrams_searches_prefixes_only(self):
+        punctuated = self.create_place("!! Punctuated Place")
+        self.create_place("Plain Place")
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.endpoint, {"q": "!!"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [(result["id"], result["match"]) for result in response.json()["results"]],
+            [(punctuated.pk, "prefix")],
+        )
+        data_query = next(
+            query["sql"] for query in queries if 'FROM "backend_place"' in query["sql"]
+        )
+        self.assertNotIn(" % ", data_query)
 
     def test_non_get_methods_are_not_search_or_write_surfaces(self):
         response = self.client.post(self.endpoint, {"q": "anything"})

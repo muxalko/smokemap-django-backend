@@ -145,7 +145,10 @@ Matching and ranking happen in PostgreSQL. Case-insensitive normalized prefix
 matches sort before fuzzy matches. Within each tier, trigram similarity sorts
 descending, followed by normalized name and numeric place ID for a completely
 deterministic order. Fuzzy inclusion uses a request-local similarity threshold
-of `0.3`; it does not depend on mutable pooled-connection state. The query is
+of `0.3`; it does not depend on mutable pooled-connection state. A query from
+which `pg_trgm` extracts no trigrams (for example punctuation-only input) cannot
+match fuzzily, so it searches prefixes only and never forces a sequential
+scan. The query is
 sliced to the requested limit before evaluation and uses `select_related` for
 its address and category context.
 
