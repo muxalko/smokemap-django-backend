@@ -12,24 +12,51 @@ class Migration(migrations.Migration):
 
     operations = [
         TrigramExtension(),
-        migrations.AddIndex(
-            model_name="place",
-            index=models.Index(
-                django.contrib.postgres.indexes.OpClass(
-                    django.db.models.functions.text.Lower("name"),
-                    name="varchar_pattern_ops",
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=(
+                        'CREATE INDEX "place_name_lower_prefix_idx" '
+                        'ON "backend_place" ((LOWER("name")) varchar_pattern_ops)'
+                    ),
+                    reverse_sql='DROP INDEX "place_name_lower_prefix_idx"',
                 ),
-                name="place_name_lower_prefix_idx",
-            ),
+            ],
+            state_operations=[
+                migrations.AddIndex(
+                    model_name="place",
+                    index=models.Index(
+                        django.contrib.postgres.indexes.OpClass(
+                            django.db.models.functions.text.Lower("name"),
+                            name="varchar_pattern_ops",
+                        ),
+                        name="place_name_lower_prefix_idx",
+                    ),
+                ),
+            ],
         ),
-        migrations.AddIndex(
-            model_name="place",
-            index=django.contrib.postgres.indexes.GinIndex(
-                django.contrib.postgres.indexes.OpClass(
-                    django.db.models.functions.text.Lower("name"),
-                    name="gin_trgm_ops",
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=(
+                        'CREATE INDEX "place_name_lower_trgm_idx" '
+                        'ON "backend_place" USING gin '
+                        '((LOWER("name")) gin_trgm_ops)'
+                    ),
+                    reverse_sql='DROP INDEX "place_name_lower_trgm_idx"',
                 ),
-                name="place_name_lower_trgm_idx",
-            ),
+            ],
+            state_operations=[
+                migrations.AddIndex(
+                    model_name="place",
+                    index=django.contrib.postgres.indexes.GinIndex(
+                        django.contrib.postgres.indexes.OpClass(
+                            django.db.models.functions.text.Lower("name"),
+                            name="gin_trgm_ops",
+                        ),
+                        name="place_name_lower_trgm_idx",
+                    ),
+                ),
+            ],
         ),
     ]
