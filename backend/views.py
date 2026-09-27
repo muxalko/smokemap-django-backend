@@ -16,6 +16,9 @@ from backend.serializers import (
     ViewportPlaceSerializer,
 )
 from backend.permissions import IsAdministratorOrReadOnly
+from backend.moderation import hard_delete_place
+from backend.submissions import SubmissionOperationError
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework_gis.filters import InBBoxFilter
 
 
@@ -198,3 +201,9 @@ class PlaceViewSet(viewsets.ModelViewSet):
     
     serializer_class = PlaceSerializer
     permission_classes = [IsAdministratorOrReadOnly]
+
+    def perform_destroy(self, instance):
+        try:
+            hard_delete_place(self.request.user, instance.pk)
+        except SubmissionOperationError as error:
+            raise DRFValidationError(str(error)) from error

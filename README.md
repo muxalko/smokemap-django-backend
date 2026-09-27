@@ -243,12 +243,19 @@ reviewer's own submission.
 The services lock the submission aggregate and commit its state, authenticated
 actor, reviewer metadata, and append-only lifecycle event together. Approval
 also takes a transaction-scoped lock derived from the complete normalized place
-name and rechecks nearby public places before materializing exactly one `Place`.
+name and rechecks nearby public places before materializing exactly one `Place`,
+its legacy map-compatibility `Location`, and any legacy unmanaged image links.
+Managed attachments remain private and request-bound; approval never exposes a
+private bucket, key, object URL, or managed image through the public place API.
 Rejection and withdrawal remove retained attachment rows and move their exact
 owner-bound upload intents to `cleanup_pending`; the existing media cleanup job
 deletes object-store data outside the lifecycle transaction. Exceptional hard
 deletion remains administrator-only, leaves a standalone durable audit record,
-and refuses deletion while managed media still requires cleanup.
+and refuses deletion while any image metadata or managed media still requires
+explicit cleanup. Approved requests and the places materialized from them cannot
+be hard-deleted through compatibility APIs. Deleting an unreferenced legacy
+place atomically removes only its denormalized `Location` row and database
+record; moderation never infers authority to delete an object from an image URL.
 
 Moderation reads use `moderationQueueV4(first, after)`. The query is limited to
 active moderators and administrators, returns pending submissions oldest-first

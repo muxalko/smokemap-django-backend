@@ -17,6 +17,7 @@ from .media import _expire_locked_intent
 from .models import (
     CustomUser,
     Image,
+    Location,
     MediaUploadIntent,
     Place,
     Request,
@@ -214,6 +215,36 @@ def _promote_tags_and_materialize_place(submission):
     )
     if tag_ids:
         place.tags.add(*tag_ids)
+
+    # Managed attachments remain private, request-bound media.  Only legacy
+    # unmanaged image metadata is linked to the public place; its URL was
+    # already part of the legacy public contract.  Lock every candidate so a
+    # concurrent administrative edit cannot produce a partial publication.
+    legacy_images = list(
+        Image.objects.select_for_update()
+        .filter(request=submission, is_managed=False)
+        .order_by("pk")
+    )
+    if any(image.place_id is not None for image in legacy_images):
+        raise SubmissionStateError(
+            "submission image metadata is already attached to a place"
+        )
+    for image in legacy_images:
+        image.place = place
+        image.save(update_fields=["place"])
+
+    # ``Location`` is the bounded legacy map compatibility record.  The v2
+    # viewport reads authoritative Address geometry, but older clients still
+    # require this denormalized row to become visible in the same transaction.
+    Location.objects.create(
+        place_id=str(place.pk),
+        name=place.name,
+        category=place.category_id,
+        info=(place.description or "")[:254],
+        address=(place.address.addressString or "")[:254],
+        tags=",".join(tags[link.tag_id].name for link in links)[:254],
+        geom=place.address.location,
+    )
     return place
 
 
@@ -339,6 +370,7 @@ def _review_submission(actor, submission_id, idempotency_key, comment, operation
             result=_result_payload(submission, place=place),
             from_state=Request.State.PENDING,
             to_state=submission.state,
+            comment=normalized_comment,
         )
         return ModerationResult(
             submission=submission, place=place, replayed=False
@@ -375,12 +407,18 @@ def hard_delete_submission(actor, submission_id):
             raise ModerationPermissionDenied("administrator permission required")
         if submission.state == Request.State.APPROVED:
             raise SubmissionNotFound("submission not found")
-        intents, images = _lock_submission_media(submission)
+        intents, _managed_images = _lock_submission_media(submission)
+        images = list(
+            Image.objects.select_for_update()
+            .filter(request=submission)
+            .order_by("pk")
+        )
         if images or any(
             intent.state != MediaUploadIntent.State.DELETED for intent in intents
         ):
             raise ModerationMediaCleanupRequired(
-                "submission media must be cleaned before hard deletion"
+                "submission image metadata and managed media must be cleaned "
+                "before hard deletion"
             )
 
         # Deleted intents have no remaining object. Their operation evidence is
@@ -402,4 +440,74 @@ def hard_delete_submission(actor, submission_id):
             target_id=target_id,
         )
         submission.delete()
+        return target_id
+
+
+def hard_delete_place(actor, place_id):
+    """Delete an unreferenced public place without deleting stored objects.
+
+    Approved submission results and places with image metadata are retained.
+    The administrator must use an explicit media workflow before deletion; an
+    object URL or private storage key is never interpreted as deletion authority.
+    """
+    _validate_actor_shape(actor)
+    if not is_administrator(actor):
+        raise ModerationPermissionDenied("administrator permission required")
+
+    with transaction.atomic():
+        try:
+            place = Place.objects.select_for_update().get(pk=place_id)
+        except (Place.DoesNotExist, ValidationError, TypeError, ValueError) as error:
+            raise SubmissionNotFound("place not found") from error
+        locked_actor = _locked_actor(actor)
+        if not is_administrator(locked_actor):
+            raise ModerationPermissionDenied("administrator permission required")
+
+        if SubmissionIdempotency.objects.select_for_update().filter(
+            operation=APPROVE_OPERATION,
+            original_result__place_id=place.pk,
+        ).exists():
+            raise SubmissionStateError(
+                "a place produced by an approved submission cannot be hard deleted"
+            )
+        # Older approved rows predate idempotency evidence and have no explicit
+        # place foreign key.  Conservatively retain an exact name/address match
+        # rather than allowing the compatibility endpoint to split that result.
+        if Request.objects.select_for_update().filter(
+            state=Request.State.APPROVED,
+            name=place.name,
+            address_id=place.address_id,
+        ).exists():
+            raise SubmissionStateError(
+                "a place produced by an approved submission cannot be hard deleted"
+            )
+
+        images = list(
+            Image.objects.select_for_update().filter(place=place).order_by("pk")
+        )
+        if images:
+            raise ModerationMediaCleanupRequired(
+                "place image metadata must be removed before hard deletion"
+            )
+
+        locations = list(
+            Location.objects.select_for_update()
+            .filter(place_id=str(place.pk))
+            .order_by("pk")
+        )
+
+        from .models import ModerationAudit
+
+        target_id = place.pk
+        ModerationAudit.objects.create(
+            actor=locked_actor,
+            action=ModerationAudit.Action.HARD_DELETE,
+            target_type="place",
+            target_id=target_id,
+        )
+        if locations:
+            Location.objects.filter(
+                pk__in=[location.pk for location in locations]
+            ).delete()
+        place.delete()
         return target_id

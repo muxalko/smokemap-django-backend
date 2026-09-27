@@ -20,6 +20,7 @@ from .media import process_media_cleanup
 from .models import (
     Category,
     Image,
+    Location,
     MediaUploadIntent,
     ModerationAudit,
     Place,
@@ -31,6 +32,7 @@ from .models import (
 )
 from .moderation import (
     approve_submission,
+    hard_delete_place,
     hard_delete_submission,
     reject_submission,
     withdraw_submission,
@@ -164,6 +166,17 @@ class ModerationFixtureMixin:
         return intent, image
 
     @staticmethod
+    def attach_legacy_image(submission, name="legacy.jpg"):
+        return Image.objects.create(
+            set_id="legacy-set",
+            name=name,
+            url=f"https://legacy.invalid/{name}",
+            metadata={"legacy": True},
+            request=submission,
+            place=None,
+        )
+
+    @staticmethod
     def context(user):
         return SimpleNamespace(user=user, META={})
 
@@ -210,6 +223,8 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
     def test_approval_materializes_one_place_promotes_tags_and_records_reviewer(self):
         submission = self.create_pending()
         private_tag = Tag.objects.get(canonical="private proposal")
+        managed_intent, managed_image = self.attach_media(submission)
+        legacy_image = self.attach_legacy_image(submission)
 
         result = approve_submission(
             self.moderator, submission.pk, "approve-key", "  Looks\n good  "
@@ -229,10 +244,23 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
             list(result.place.tags.values_list("pk", flat=True)), [private_tag.pk]
         )
         self.assertTrue(private_tag.is_public)
+        legacy_image.refresh_from_db()
+        managed_image.refresh_from_db()
+        managed_intent.refresh_from_db()
+        self.assertEqual(legacy_image.place_id, result.place.pk)
+        self.assertIsNone(managed_image.place_id)
+        self.assertEqual(managed_image.request_id, submission.pk)
+        self.assertEqual(managed_intent.state, MediaUploadIntent.State.ATTACHED)
+        location = Location.objects.get(place_id=str(result.place.pk))
+        self.assertEqual(location.name, submission.name)
+        self.assertEqual(location.category, submission.category_id)
+        self.assertEqual(location.geom, submission.address.location)
+        self.assertEqual(location.tags, private_tag.name)
         event = SubmissionLifecycleEvent.objects.get(
             submission=submission, operation=SubmissionOperation.APPROVE
         )
         self.assertEqual(event.actor_id, self.moderator.pk)
+        self.assertEqual(event.comment, "Looks good")
         self.assertEqual(event.from_state, Request.State.PENDING)
         self.assertEqual(event.to_state, Request.State.APPROVED)
 
@@ -241,7 +269,14 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
         )
         self.assertTrue(replay.replayed)
         self.assertEqual(replay.place.pk, result.place.pk)
+        with self.assertRaises(SubmissionStateError):
+            approve_submission(
+                self.moderator, submission.pk, "different-approve-key", "Looks good"
+            )
         self.assertEqual(Place.objects.filter(name=submission.name).count(), 1)
+        self.assertEqual(
+            Location.objects.filter(place_id=str(result.place.pk)).count(), 1
+        )
 
     def test_rejection_is_distinct_from_withdrawal_and_hands_media_to_cleanup(self):
         submission = self.create_pending()
@@ -264,6 +299,7 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
             submission=submission, operation=SubmissionOperation.REJECT
         )
         self.assertEqual(event.actor_id, self.moderator.pk)
+        self.assertEqual(event.comment, "Insufficient detail")
         self.assertEqual(event.to_state, Request.State.REJECTED)
         self.assertFalse(
             SubmissionLifecycleEvent.objects.filter(
@@ -329,6 +365,7 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
     def test_injected_audit_failure_rolls_back_place_tags_and_state(self):
         submission = self.create_pending()
         tag = Tag.objects.get(canonical="private proposal")
+        legacy_image = self.attach_legacy_image(submission, "rollback.jpg")
 
         with patch.object(
             SubmissionLifecycleEvent.objects,
@@ -344,6 +381,9 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
         self.assertIsNone(submission.reviewed_by_id)
         self.assertFalse(tag.is_public)
         self.assertFalse(Place.objects.exists())
+        self.assertFalse(Location.objects.exists())
+        legacy_image.refresh_from_db()
+        self.assertIsNone(legacy_image.place_id)
         self.assertFalse(
             SubmissionIdempotency.objects.filter(
                 operation=SubmissionOperation.APPROVE
@@ -440,6 +480,82 @@ class ModerationLifecycleTests(ModerationFixtureMixin, TestCase):
         self.assertFalse(
             ModerationAudit.objects.filter(target_id=submission.pk).exists()
         )
+
+    def test_hard_delete_refuses_legacy_image_metadata_without_storage_authority(self):
+        submission = self.create_pending()
+        image = self.attach_legacy_image(submission)
+
+        with self.assertRaisesMessage(ValueError, "image metadata"):
+            hard_delete_submission(self.administrator, submission.pk)
+
+        self.assertTrue(Request.objects.filter(pk=submission.pk).exists())
+        self.assertTrue(Image.objects.filter(pk=image.pk).exists())
+        self.assertFalse(
+            ModerationAudit.objects.filter(
+                target_type="request", target_id=submission.pk
+            ).exists()
+        )
+
+    def test_place_hard_delete_is_admin_only_atomic_and_audited(self):
+        place = Place.objects.create(
+            name="Unreferenced legacy place",
+            category=Category.objects.get(slug="outdoors"),
+            description="Legacy",
+            address=self.create_draft(name="Address source").address,
+        )
+        location = Location.objects.create(
+            place_id=str(place.pk),
+            name=place.name,
+            category=place.category_id,
+            info="Legacy",
+            address="Moderation address",
+            tags="",
+            geom=place.address.location,
+        )
+
+        with self.assertRaisesMessage(ValueError, "administrator"):
+            hard_delete_place(self.moderator, place.pk)
+
+        self.assertEqual(hard_delete_place(self.administrator, place.pk), place.pk)
+        self.assertFalse(Place.objects.filter(pk=place.pk).exists())
+        self.assertFalse(Location.objects.filter(pk=location.pk).exists())
+        self.assertTrue(
+            ModerationAudit.objects.filter(
+                actor=self.administrator,
+                action=ModerationAudit.Action.HARD_DELETE,
+                target_type="place",
+                target_id=place.pk,
+            ).exists()
+        )
+
+    def test_place_hard_delete_refuses_images_and_approved_submission_results(self):
+        image_place = Place.objects.create(
+            name="Place with legacy image",
+            category=Category.objects.get(slug="outdoors"),
+            description="Legacy",
+            address=self.create_draft(name="Image address source").address,
+        )
+        image = Image.objects.create(
+            set_id="legacy-set",
+            name="place.jpg",
+            url="https://legacy.invalid/place.jpg",
+            metadata=None,
+            request=None,
+            place=image_place,
+        )
+        with self.assertRaisesMessage(ValueError, "image metadata"):
+            hard_delete_place(self.administrator, image_place.pk)
+        self.assertTrue(Place.objects.filter(pk=image_place.pk).exists())
+        self.assertTrue(Image.objects.filter(pk=image.pk).exists())
+
+        submission = self.create_pending(name="Retained approved result", longitude=10)
+        approved = approve_submission(
+            self.moderator, submission.pk, "retained-approved-result"
+        ).place
+        with self.assertRaisesMessage(ValueError, "approved submission"):
+            hard_delete_place(self.administrator, approved.pk)
+        self.assertTrue(Place.objects.filter(pk=approved.pk).exists())
+        self.assertTrue(Location.objects.filter(place_id=str(approved.pk)).exists())
 
 
 @override_settings(**PRIVATE_MEDIA_SETTINGS)

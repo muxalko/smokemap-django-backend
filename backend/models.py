@@ -582,6 +582,7 @@ class SubmissionLifecycleEvent(ImmutableAuditEvent):
     )
     system_actor = models.CharField(blank=True, null=True, max_length=64)
     operation = models.CharField(max_length=32, choices=SubmissionOperation.choices)
+    comment = models.TextField(blank=True, null=True, editable=False)
     from_state = models.CharField(
         blank=True,
         null=True,
@@ -758,8 +759,8 @@ class Image(models.Model):
     name = models.CharField(max_length=255)
     url = models.CharField(max_length=255)
     metadata = models.JSONField(blank=True, null=True)
-    request = models.ForeignKey(Request, on_delete=models.DO_NOTHING, null=True)
-    place = models.ForeignKey(Place, on_delete=models.DO_NOTHING, null=True)
+    request = models.ForeignKey(Request, on_delete=models.PROTECT, null=True)
+    place = models.ForeignKey(Place, on_delete=models.PROTECT, null=True)
     is_managed = models.BooleanField(default=False, editable=False)
     intent = models.OneToOneField(
         MediaUploadIntent,
