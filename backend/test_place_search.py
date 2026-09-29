@@ -385,6 +385,125 @@ class LegacyPlaceSearchCompatibilityTests(TestCase):
                 self.assertFalse(fields[name]["isDeprecated"])
 
 
+class PublicAddressGraphQLExposureTests(TestCase):
+    """Public address features expose a label and point, never submissions."""
+
+    ADDRESS_SELECTION = (
+        "address { type id properties { addressString } "
+        "geometry { type coordinates } }"
+    )
+
+    def setUp(self):
+        self.category = Category.objects.get(slug="outdoors")
+        self.graphql = GraphQLClient(schema)
+        self.accounts = create_role_accounts("address-graphql")
+        self.address = Address.objects.create(
+            addressString="Shared public address",
+            location=Point(-76.5, 38.5, srid=4326),
+        )
+        self.place = Place.objects.create(
+            name="Address Place", category=self.category, address=self.address
+        )
+        Request.objects.create(
+            name="Address Pending Secret",
+            category=self.category,
+            description="Pending Secret description",
+            address=self.address,
+            owner=self.accounts["user"],
+            state=Request.State.PENDING,
+            approved=False,
+            approved_comment="Pending Secret comment",
+        )
+
+    def post(self, query, account=None, variables=None):
+        headers = {}
+        if account is not None:
+            headers["HTTP_AUTHORIZATION"] = (
+                f"Bearer {issue_token_pair(account)['token']}"
+            )
+        return self.client.post(
+            "/graphql/",
+            data=json.dumps({"query": query, "variables": variables or {}}),
+            content_type="application/json",
+            **headers,
+        )
+
+    def test_address_types_introspect_only_whitelisted_fields(self):
+        result = self.graphql.execute(
+            """
+            {
+              address: __type(name: "AddressType") { fields { name } }
+              properties: __type(name: "AddressProperties") { fields { name } }
+            }
+            """
+        )
+
+        self.assertNotIn("errors", result)
+        self.assertEqual(
+            {field["name"] for field in result["data"]["address"]["fields"]},
+            {"type", "id", "geometry", "bbox", "properties"},
+        )
+        self.assertEqual(
+            [field["name"] for field in result["data"]["properties"]["fields"]],
+            ["addressString"],
+        )
+
+    def test_reverse_request_and_place_relations_are_unqueryable_for_every_role(self):
+        queries = {
+            "places": "{ places { address { properties { %s { id name } } } } }",
+            "placeById": (
+                'query($id: ID) { placeById(id: $id) '
+                "{ address { properties { %s { id name } } } } }"
+            ),
+            "addresses": "{ addresses { properties { %s { id name } } } }",
+        }
+        accounts = {"guest": None, **self.accounts}
+        for relation in ("requestSet", "placeSet"):
+            for field, template in queries.items():
+                for role, account in accounts.items():
+                    with self.subTest(relation=relation, field=field, role=role):
+                        response = self.post(
+                            template % relation,
+                            account,
+                            {"id": str(self.place.pk)},
+                        )
+                        payload = response.json()
+                        self.assertNotIn("data", payload)
+                        self.assertEqual(len(payload["errors"]), 1)
+                        self.assertIn(
+                            f"Cannot query field '{relation}' on type "
+                            "'AddressProperties'.",
+                            payload["errors"][0]["message"],
+                        )
+                        self.assertNotIn("Pending Secret", str(payload))
+
+    def test_frontend_address_label_and_coordinates_are_preserved(self):
+        expected = {
+            "type": "Feature",
+            "id": str(self.address.pk),
+            "properties": {"addressString": "Shared public address"},
+            "geometry": {"type": "Point", "coordinates": [-76.5, 38.5]},
+        }
+        by_id = self.post(
+            "query($id: ID) { placeById(id: $id) { %s } }"
+            % self.ADDRESS_SELECTION,
+            variables={"id": str(self.place.pk)},
+        ).json()
+        listed = self.post("{ places { %s } }" % self.ADDRESS_SELECTION).json()
+        addresses = self.post(
+            "{ addresses { type id properties { addressString } "
+            "geometry { type coordinates } } }"
+        ).json()
+
+        self.assertNotIn("errors", by_id)
+        self.assertEqual(by_id["data"]["placeById"]["address"], expected)
+        self.assertNotIn("errors", listed)
+        self.assertEqual(listed["data"]["places"], [{"address": expected}])
+        self.assertNotIn("errors", addresses)
+        self.assertEqual(addresses["data"]["addresses"], [expected])
+        self.assertNotIn("Pending Secret", str([by_id, listed, addresses]))
+
+
 class LegacyRestPlaceListingTests(TestCase):
     """Pin the legacy public `/places/` listing, which is not a search surface."""
 
