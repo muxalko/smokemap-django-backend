@@ -81,9 +81,14 @@ from .tokens import (
 )
 
 import logging
+import warnings
 logger = logging.getLogger( __name__ )
 
 LEGACY_PUBLIC_PLACE_LIMIT = 20
+PLACES_DEPRECATION_REASON = (
+    "Unbounded; use GET /api/v1/places/search/ for name search or "
+    "GET /api/v1/places/ for viewport reads."
+)
 
 ##################################TYPES###############################
 class UserType(DjangoObjectType):
@@ -211,19 +216,22 @@ class MediaPreviewAuthorization(graphene.ObjectType):
     url = graphene.String(required=True)
     expires_at = graphene.DateTime(required=True)
 
-class AddressType(graphql_geojson.GeoJSONType):
-    class Meta:
-        model = Address
-        geojson_field = 'location'
-        # yelds UserWarning: Field name "name" matches an attribute on Django model "backend.Place"
-        # but it's not a model field so Graphene cannot determine what type it should be.
-        # Either define the type of the field on DjangoObjectType "PlaceType"
-        # or remove it from the "fields" list
-        # fields = (
-        #     'id',
-        #     # 'addressString',
-        #     'location'
-        # )
+with warnings.catch_warnings():
+    # graphql_geojson nests addressString under properties, which graphene's
+    # top-level field validation misreports as an unknown model field.
+    warnings.filterwarnings(
+        "ignore",
+        message='Field name "addressString" matches an attribute',
+        category=UserWarning,
+    )
+
+    class AddressType(graphql_geojson.GeoJSONType):
+        class Meta:
+            model = Address
+            geojson_field = 'location'
+            # Public places share this type, so reverse relations such as
+            # requestSet must never become queryable submission metadata.
+            fields = ('id', 'addressString', 'location')
 
 class RequestType(DjangoObjectType):
     state = graphene.String(required=True)
@@ -377,7 +385,10 @@ class Query(graphene.ObjectType):
         attachment_id=graphene.ID(required=True),
     )
 
-    places = graphene.List(PlaceType)
+    places = graphene.List(
+        PlaceType,
+        deprecation_reason=PLACES_DEPRECATION_REASON,
+    )
 
     places_names = graphene.List(graphene.String)
 
@@ -506,7 +517,8 @@ class Query(graphene.ObjectType):
         return MediaPreviewAuthorization(url=url, expires_at=expires_at)
 
     def resolve_places(root, info):
-        # Querying a list
+        # Deprecated and intentionally unbounded until smokemap-webapp#10
+        # moves clients to the bounded search API (#105).
         return Place.objects.all()
     
     def resolve_places_names(root, info):
