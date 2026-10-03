@@ -710,6 +710,125 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
             1,
         )
 
+    def run_cleanup_claim_first(self, operation):
+        """Pause cleanup after its durable claim, then run moderation."""
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        outcomes = Queue()
+        storage = Mock()
+        storage.object_is_absent.return_value = True
+
+        def paused_delete(**kwargs):
+            if not cleanup_started.is_set():
+                cleanup_started.set()
+                if not release_cleanup.wait(timeout=20):
+                    raise AssertionError("timed out waiting to release cleanup")
+
+        storage.delete_object.side_effect = paused_delete
+
+        def cleanup_worker():
+            close_old_connections()
+            try:
+                counts = process_media_cleanup(storage=storage, now=timezone.now())
+                outcomes.put(
+                    (
+                        "cleanup",
+                        "ok",
+                        counts.claimed,
+                        counts.deleted,
+                        counts.skipped,
+                    )
+                )
+            except Exception as error:
+                outcomes.put(("cleanup", type(error).__name__, str(error)))
+            finally:
+                close_old_connections()
+
+        cleanup_thread = threading.Thread(
+            target=cleanup_worker, name="moderation-media-cleanup", daemon=True
+        )
+        cleanup_thread.start()
+        try:
+            self.assertTrue(cleanup_started.wait(timeout=10))
+            try:
+                moderation_outcome = ("moderation", "ok", operation())
+            except Exception as error:
+                moderation_outcome = (
+                    "moderation",
+                    type(error).__name__,
+                    str(error),
+                )
+        finally:
+            release_cleanup.set()
+        cleanup_thread.join(timeout=30)
+        self.assertFalse(cleanup_thread.is_alive())
+        return moderation_outcome, outcomes.get(timeout=1)
+
+    def run_moderation_lock_first(self, operation):
+        """Hold the submission lock until cleanup has boundedly skipped it."""
+        moderation_locked = threading.Event()
+        release_moderation = threading.Event()
+        outcomes = Queue()
+        real_lock = moderation_services._locked_submission
+        storage = Mock()
+        storage.object_is_absent.return_value = True
+
+        def paused_lock(*args, **kwargs):
+            result = real_lock(*args, **kwargs)
+            if threading.current_thread().name == "moderation-cleanup-review":
+                moderation_locked.set()
+                if not release_moderation.wait(timeout=20):
+                    raise AssertionError("timed out waiting to release moderation")
+            return result
+
+        def moderation_worker():
+            close_old_connections()
+            try:
+                outcomes.put(("moderation", "ok", operation()))
+            except Exception as error:
+                outcomes.put(("moderation", type(error).__name__, str(error)))
+            finally:
+                close_old_connections()
+
+        with patch.object(
+            moderation_services, "_locked_submission", side_effect=paused_lock
+        ):
+            moderation_thread = threading.Thread(
+                target=moderation_worker,
+                name="moderation-cleanup-review",
+                daemon=True,
+            )
+            moderation_thread.start()
+            try:
+                self.assertTrue(moderation_locked.wait(timeout=10))
+                counts = process_media_cleanup(storage=storage, now=timezone.now())
+            finally:
+                release_moderation.set()
+            moderation_thread.join(timeout=30)
+
+        self.assertFalse(moderation_thread.is_alive())
+        return outcomes.get(timeout=1), (
+            "cleanup",
+            "ok",
+            counts.claimed,
+            counts.deleted,
+            counts.skipped,
+        )
+
+    def assert_single_cleanup_target(self, submission, intent, expected_state):
+        intent.refresh_from_db()
+        self.assertEqual(intent.state, expected_state)
+        self.assertEqual(
+            MediaUploadIntent.objects.filter(submission=submission).count(), 1
+        )
+        self.assertEqual(
+            MediaUploadIntent.objects.filter(
+                submission=submission,
+                state=MediaUploadIntent.State.CLEANUP_PENDING,
+            ).count(),
+            int(expected_state == MediaUploadIntent.State.CLEANUP_PENDING),
+        )
+
     def test_simultaneous_withdrawals_serialize_to_one_transition(self):
         submission = self.create_pending()
         outcomes = self.run_paused_first(
@@ -929,6 +1048,93 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
             ).count(),
             1,
         )
+
+    def test_approval_and_media_cleanup_are_safe_in_both_lock_orders(self):
+        for cleanup_first in (True, False):
+            with self.subTest(cleanup_first=cleanup_first):
+                submission = self.create_pending(
+                    name=f"Approval cleanup race {cleanup_first}",
+                    longitude=10 if cleanup_first else 20,
+                )
+                intent = self.make_cleanup_pending_media(submission)
+                event_count = SubmissionLifecycleEvent.objects.filter(
+                    submission=submission
+                ).count()
+                operation = lambda: approve_submission(
+                    self.actor(self.moderator),
+                    submission.pk,
+                    f"approve-cleanup-{cleanup_first}",
+                ).replayed
+
+                if cleanup_first:
+                    moderation, cleanup = self.run_cleanup_claim_first(operation)
+                    expected_intent_state = MediaUploadIntent.State.DELETED
+                    self.assertEqual(cleanup, ("cleanup", "ok", 1, 1, 0))
+                else:
+                    moderation, cleanup = self.run_moderation_lock_first(operation)
+                    expected_intent_state = MediaUploadIntent.State.CLEANUP_PENDING
+                    self.assertEqual(cleanup, ("cleanup", "ok", 0, 0, 1))
+
+                self.assertEqual(moderation[1], "MediaNotReady")
+                submission.refresh_from_db()
+                self.assertEqual(submission.state, Request.State.PENDING)
+                self.assertEqual(Place.objects.count(), 0)
+                self.assertEqual(
+                    SubmissionLifecycleEvent.objects.filter(
+                        submission=submission
+                    ).count(),
+                    event_count,
+                )
+                self.assertFalse(
+                    SubmissionLifecycleEvent.objects.filter(
+                        submission=submission,
+                        operation=SubmissionOperation.APPROVE,
+                    ).exists()
+                )
+                self.assert_single_cleanup_target(
+                    submission, intent, expected_intent_state
+                )
+
+    def test_rejection_and_media_cleanup_are_safe_in_both_lock_orders(self):
+        for cleanup_first in (True, False):
+            with self.subTest(cleanup_first=cleanup_first):
+                submission = self.create_pending(
+                    name=f"Rejection cleanup race {cleanup_first}",
+                    longitude=30 if cleanup_first else 40,
+                )
+                intent = self.make_cleanup_pending_media(submission)
+                event_count = SubmissionLifecycleEvent.objects.filter(
+                    submission=submission
+                ).count()
+                operation = lambda: reject_submission(
+                    self.actor(self.moderator),
+                    submission.pk,
+                    f"reject-cleanup-{cleanup_first}",
+                ).replayed
+
+                if cleanup_first:
+                    moderation, cleanup = self.run_cleanup_claim_first(operation)
+                    expected_intent_state = MediaUploadIntent.State.DELETED
+                    self.assertEqual(cleanup, ("cleanup", "ok", 1, 1, 0))
+                else:
+                    moderation, cleanup = self.run_moderation_lock_first(operation)
+                    expected_intent_state = MediaUploadIntent.State.CLEANUP_PENDING
+                    self.assertEqual(cleanup, ("cleanup", "ok", 0, 0, 1))
+
+                self.assertEqual(moderation, ("moderation", "ok", False))
+                submission.refresh_from_db()
+                self.assertEqual(submission.state, Request.State.REJECTED)
+                self.assertEqual(Place.objects.count(), 0)
+                self.assertEqual(
+                    SubmissionLifecycleEvent.objects.filter(
+                        submission=submission
+                    ).count(),
+                    event_count + 1,
+                )
+                self.assert_one_event(submission, SubmissionOperation.REJECT)
+                self.assert_single_cleanup_target(
+                    submission, intent, expected_intent_state
+                )
 
     def test_withdrawal_preserves_an_in_flight_media_cleanup_handoff(self):
         submission = self.create_draft(name="Cleanup claim race")
