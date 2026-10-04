@@ -11,6 +11,7 @@ from .models import (
     MediaUploadIntent,
     ModerationAudit,
     Place,
+    PublicMediaRendition,
     Request,
     RequestTag,
     Tag,
@@ -59,6 +60,7 @@ from .moderation import (
     reject_submission,
     withdraw_submission,
 )
+from .public_media import published_media_prefetch, revoke_public_media
 from .moderation_queue import (
     LEGACY_PAGE_SIZE,
     ModerationQueueInputError,
@@ -82,6 +84,7 @@ from .tokens import (
 
 import logging
 import warnings
+from django.urls import reverse
 logger = logging.getLogger( __name__ )
 
 LEGACY_PUBLIC_PLACE_LIMIT = 20
@@ -103,7 +106,38 @@ class UserType(DjangoObjectType):
         model = CustomUser
         fields = ('name', 'image', 'email', 'role')
 
+class PublicMediaRenditionType(graphene.ObjectType):
+    public_id = graphene.UUID(required=True)
+    url = graphene.String(required=True)
+    position = graphene.Int(required=True)
+    mime_type = graphene.String(required=True)
+    byte_size = graphene.Int(required=True)
+    width = graphene.Int(required=True)
+    height = graphene.Int(required=True)
+
+    def resolve_url(self, info):
+        relative = reverse(
+            "public-media-rendition", kwargs={"public_id": self.public_id}
+        )
+        request = info.context
+        if request is not None and hasattr(request, "build_absolute_uri"):
+            return request.build_absolute_uri(relative)
+        return relative
+
+
 class PlaceType(DjangoObjectType):
+    media = graphene.List(
+        graphene.NonNull(PublicMediaRenditionType), required=True
+    )
+
+    def resolve_media(self, info):
+        prefetched = getattr(self, "_published_media", None)
+        if prefetched is not None:
+            return prefetched
+        return self.public_media.filter(
+            state=PublicMediaRendition.State.PUBLISHED
+        ).order_by("position", "pk")
+
     class Meta:
         model = Place
         fields = ('id','name', 'category', 'address', 'description', 'tags', 'website', 'image_set')
@@ -519,7 +553,7 @@ class Query(graphene.ObjectType):
     def resolve_places(root, info):
         # Deprecated and intentionally unbounded until smokemap-webapp#10
         # moves clients to the bounded search API (#105).
-        return Place.objects.all()
+        return Place.objects.prefetch_related(published_media_prefetch())
     
     def resolve_places_names(root, info):
         # Deprecated compatibility surface for the old client-side search.
@@ -532,7 +566,11 @@ class Query(graphene.ObjectType):
         return Place.objects.get(pk=id)
     
     def resolve_places_by_name(root, info, name):
-        return Place.objects.filter(name=name).order_by("pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
+        return (
+            Place.objects.filter(name=name)
+            .order_by("pk")
+            .prefetch_related(published_media_prefetch())[:LEGACY_PUBLIC_PLACE_LIMIT]
+        )
     
     def resolve_places_startWith_name(root, info, name):
         try:
@@ -542,6 +580,7 @@ class Query(graphene.ObjectType):
         return (
             Place.objects.annotate(normalized_name=Lower("name"))
             .filter(normalized_name__startswith=normalized_query)
+            .prefetch_related(published_media_prefetch())
             .order_by("normalized_name", "pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
         )
     
@@ -834,6 +873,29 @@ class RejectSubmissionV4(graphene.Mutation):
         except Exception as error:
             _raise_submission_graphql_error(error, "SUBMISSION_REJECT_FAILED")
         return cls(submission=result.submission, replayed=result.replayed)
+
+
+class RevokePublicMediaV4(graphene.Mutation):
+    class Arguments:
+        public_id = graphene.UUID(required=True)
+        idempotency_key = graphene.String(required=True)
+
+    public_id = graphene.UUID(required=True)
+    state = graphene.String(required=True)
+    replayed = graphene.Boolean(required=True)
+
+    @classmethod
+    def mutate(cls, root, info, public_id, idempotency_key):
+        actor = require_administrator(info)
+        try:
+            result = revoke_public_media(actor, public_id, idempotency_key)
+        except Exception as error:
+            _raise_submission_graphql_error(error, "PUBLIC_MEDIA_REVOKE_FAILED")
+        return cls(
+            public_id=result.rendition.public_id,
+            state=result.rendition.state,
+            replayed=result.replayed,
+        )
 
 
 class DeleteRequest(graphene.Mutation):
@@ -1213,6 +1275,7 @@ class Mutation(graphene.ObjectType):
     withdraw_submission_v4 = WithdrawSubmissionV4.Field()
     approve_submission_v4 = ApproveSubmissionV4.Field()
     reject_submission_v4 = RejectSubmissionV4.Field()
+    revoke_public_media_v4 = RevokePublicMediaV4.Field()
     create_media_upload_intent = CreateMediaUploadIntent.Field()
     issue_media_upload_intent = IssueMediaUploadIntent.Field()
     renew_media_upload_intent = RenewMediaUploadIntent.Field()

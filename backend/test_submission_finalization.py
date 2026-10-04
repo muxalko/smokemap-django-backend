@@ -169,6 +169,9 @@ class SubmissionFixtureMixin:
             sealed_object_key=(
                 f"submission-media-sealed/{submission.pk}/{uuid.uuid4().hex}"
             ),
+            rendition_object_key=(
+                f"submission-media-renditions/{submission.pk}/{uuid.uuid4().hex}"
+            ),
             expected_mime="image/png",
             declared_byte_size=64,
             declared_sha256=digest,
@@ -181,6 +184,9 @@ class SubmissionFixtureMixin:
             detected_mime="image/png",
             width=2,
             height=2,
+            rendition_byte_size=64,
+            rendition_sha256=digest,
+            rendition_mime="image/png",
             verified_at=now,
             attached_at=now,
         )
@@ -227,6 +233,9 @@ class SubmissionFixtureMixin:
             "sealed_object_key": (
                 f"submission-media-sealed/{submission.pk}/{uuid.uuid4().hex}"
             ),
+            "rendition_object_key": (
+                f"submission-media-renditions/{submission.pk}/{uuid.uuid4().hex}"
+            ),
             "expected_mime": "image/png",
             "declared_byte_size": 64,
             "declared_sha256": digest,
@@ -243,6 +252,9 @@ class SubmissionFixtureMixin:
                 detected_mime="image/png",
                 width=2,
                 height=2,
+                rendition_byte_size=64,
+                rendition_sha256=digest,
+                rendition_mime="image/png",
                 verified_at=now,
             )
         return MediaUploadIntent.objects.create(**values)

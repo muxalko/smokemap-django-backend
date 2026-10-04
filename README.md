@@ -44,11 +44,11 @@ MEDIA_UPLOAD_ENDPOINT_URL=http://localhost:9000
 If Compose publishes a different host port, use that published port in
 `MEDIA_UPLOAD_ENDPOINT_URL`.
 
-Each intent records separate immutable keys: the compatibility `object_key`
-field is the client-presigned upload target, while `sealed_object_key` is a
-backend-only destination for the exact bytes verified from the bounded local
-spool. The sealed key is never returned directly and is the only key an
-attached managed image may reference.
+Each intent records three separate immutable keys: the compatibility
+`object_key` is the client-presigned upload target, `sealed_object_key` is the
+backend-only exact verified source, and `rendition_object_key` is a decoded and
+re-encoded display copy with embedded metadata removed. None of these keys is
+returned publicly. The private preview continues to use the sealed source.
 
 ### Private media preview
 
@@ -80,6 +80,24 @@ Draft request media is intentionally absent from generic `Request.imageSet` and
 public `Place.imageSet` relations. Authorized clients receive M3 private request
 media only through the owner-bound media mutation responses. Approved legacy
 place images remain available through the public place image relation.
+
+### Approved managed media
+
+Approval publishes one opaque record per retained managed attachment. Public
+place GraphQL/REST metadata exposes only its application URL, opaque public ID,
+position, MIME type, byte size and dimensions. Anonymous bytes are served by
+`GET /api/v1/media/<public-id>/`; the backend reads the private sanitized
+rendition and rechecks the publication, approved submission, place link, intent
+and attachment under their canonical locks before returning `Cache-Control:
+no-store`. Source and rendition buckets/keys, intent/submission/owner IDs,
+checksums and filenames never cross that boundary.
+
+`revokePublicMediaV4` is an administrator-only, idempotent exceptional-removal
+mutation. It durably audits and revokes the public record, removes the live
+attachment, and transitions the exact upload/source/rendition binding to
+`cleanup_pending` in one transaction. Object deletion remains asynchronous and
+uses the existing lease, retry and exact-key checks; a deletion failure cannot
+make a revoked URL public again.
 
 ## Category reference data
 
@@ -346,9 +364,10 @@ The services lock the submission aggregate and commit its state, authenticated
 actor, reviewer metadata, and append-only lifecycle event together. Approval
 also takes a transaction-scoped lock derived from the complete normalized place
 name and rechecks nearby public places before materializing exactly one `Place`,
-its legacy map-compatibility `Location`, and any legacy unmanaged image links.
-Managed attachments remain private and request-bound; approval never exposes a
-private bucket, key, object URL, or managed image through the public place API.
+its legacy map-compatibility `Location`, any legacy unmanaged image links, and
+opaque publication records for managed display renditions. Approval never
+exposes a private bucket, key, storage URL, checksum, or provenance identity
+through the public place API.
 Rejection and withdrawal remove retained attachment rows and move their exact
 owner-bound upload intents to `cleanup_pending`; the existing media cleanup job
 deletes object-store data outside the lifecycle transaction. Exceptional hard
