@@ -128,6 +128,18 @@ class StaleSealCleanupClaim:
     restore_deleted: bool
 
 
+@dataclass(frozen=True)
+class RenditionBackfillClaim:
+    intent_id: uuid.UUID
+    image_id: int
+    binding: MediaBinding
+    expected_size: int
+    expected_sha256: str
+    expected_mime: str
+    expected_width: int
+    expected_height: int
+
+
 @dataclass
 class MediaCleanupCounts:
     expired: int = 0
@@ -754,6 +766,203 @@ def inspect_uploaded_object(
         )
     finally:
         temporary.close()
+
+
+def _rendition_metadata_complete(intent):
+    return bool(
+        intent.rendition_byte_size
+        and intent.rendition_sha256
+        and intent.rendition_mime in ALLOWED_MIME_TYPES
+    )
+
+
+def _claim_attached_rendition_backfill(intent_id, submission_id):
+    """Snapshot one legacy attachment under the canonical parent-first locks."""
+    with transaction.atomic():
+        submission, intent = _system_locked_parent_and_intent(intent_id)
+        if (
+            submission is None
+            or intent is None
+            or submission.pk != submission_id
+            or submission.state != Request.State.PENDING
+            or intent.state != MediaUploadIntent.State.ATTACHED
+            or intent.cleanup_claim_token is not None
+        ):
+            return None
+        image = (
+            Image.objects.select_for_update()
+            .filter(intent=intent, is_managed=True, state="attached")
+            .first()
+        )
+        if _rendition_metadata_complete(intent):
+            return True
+        if (
+            intent.rendition_byte_size is not None
+            or intent.rendition_sha256
+            or intent.rendition_mime
+            or image is None
+            or image.request_id != submission.pk
+            or image.owner_id != intent.owner_id
+            or image.place_id is not None
+            or image.storage_identifier != intent.storage_identifier
+            or image.storage_bucket != intent.storage_bucket
+            or image.storage_key != intent.sealed_object_key
+            or not intent.server_byte_size
+            or not intent.server_sha256
+            or intent.detected_mime not in ALLOWED_MIME_TYPES
+            or not intent.width
+            or not intent.height
+            or image.byte_size != intent.server_byte_size
+            or image.sha256 != intent.server_sha256
+            or image.detected_mime != intent.detected_mime
+            or image.width != intent.width
+            or image.height != intent.height
+        ):
+            return None
+        return RenditionBackfillClaim(
+            intent_id=intent.pk,
+            image_id=image.pk,
+            binding=_binding_for_intent(intent),
+            expected_size=intent.server_byte_size,
+            expected_sha256=intent.server_sha256,
+            expected_mime=intent.detected_mime,
+            expected_width=intent.width,
+            expected_height=intent.height,
+        )
+
+
+def _finish_attached_rendition_backfill(claim, outcome, storage):
+    stale_cleanup = None
+    completed = False
+    with transaction.atomic():
+        submission, intent = _system_locked_parent_and_intent(claim.intent_id)
+        image = None
+        if intent is not None:
+            image = (
+                Image.objects.select_for_update()
+                .filter(pk=claim.image_id, intent=intent, is_managed=True)
+                .first()
+            )
+        current_binding = (
+            intent is not None and _intent_has_exact_object_binding(intent, claim.binding)
+        )
+        still_attached = bool(
+            submission is not None
+            and intent is not None
+            and image is not None
+            and submission.pk == claim.binding.submission_id
+            and intent.state == MediaUploadIntent.State.ATTACHED
+            and image.state == "attached"
+            and image.request_id == submission.pk
+            and image.owner_id == intent.owner_id
+            and image.place_id is None
+            and image.storage_identifier == intent.storage_identifier
+            and image.storage_bucket == intent.storage_bucket
+            and image.storage_key == intent.sealed_object_key
+            and intent.server_byte_size == claim.expected_size
+            and intent.server_sha256 == claim.expected_sha256
+            and intent.detected_mime == claim.expected_mime
+            and intent.width == claim.expected_width
+            and intent.height == claim.expected_height
+            and image.byte_size == claim.expected_size
+            and image.sha256 == claim.expected_sha256
+            and image.detected_mime == claim.expected_mime
+            and image.width == claim.expected_width
+            and image.height == claim.expected_height
+            and current_binding
+        )
+        if still_attached and outcome.media is not None:
+            media = outcome.media
+            metadata_matches = (
+                intent.rendition_byte_size == media.rendition_byte_size
+                and intent.rendition_sha256 == media.rendition_sha256
+                and intent.rendition_mime == media.rendition_mime
+                and intent.width == media.width
+                and intent.height == media.height
+            )
+            if submission.state == Request.State.PENDING:
+                intent.rendition_byte_size = media.rendition_byte_size
+                intent.rendition_sha256 = media.rendition_sha256
+                intent.rendition_mime = media.rendition_mime
+                intent.width = media.width
+                intent.height = media.height
+                intent.save(
+                    update_fields=[
+                        "rendition_byte_size",
+                        "rendition_sha256",
+                        "rendition_mime",
+                        "width",
+                        "height",
+                        "updated_at",
+                    ]
+                )
+                if image.width != media.width or image.height != media.height:
+                    image.width = media.width
+                    image.height = media.height
+                    image.save(update_fields=["width", "height"])
+                completed = True
+            elif submission.state == Request.State.APPROVED and metadata_matches:
+                # A concurrent approval completed the same deterministic backfill.
+                completed = True
+        elif outcome.sealed and intent is not None:
+            # A rejection/cleanup may have won while storage I/O was in flight.
+            # Reuse the existing tokenized cleanup lease to fence its stale
+            # finisher and remove both exact immutable keys, including any
+            # rendition this attempt may have written after the older delete.
+            stale_cleanup = _claim_stale_seal_cleanup_locked(intent, claim.binding)
+
+    if stale_cleanup is not None:
+        _run_stale_seal_cleanup_claim(stale_cleanup, storage)
+    return completed
+
+
+def backfill_attached_renditions(submission_id, *, storage=None):
+    """Idempotently prepare migrated attached media for pending approval.
+
+    Migration 0017 could assign private rendition keys but could not read private
+    object storage. Reinspect only exact retained sealed objects, outside database
+    transactions, then linearize metadata under the existing aggregate locks.
+    """
+    intent_ids = list(
+        MediaUploadIntent.objects.filter(
+            submission_id=submission_id,
+            state=MediaUploadIntent.State.ATTACHED,
+            rendition_byte_size__isnull=True,
+            rendition_sha256="",
+            rendition_mime="",
+        )
+        .order_by("slot", "id")
+        .values_list("pk", flat=True)
+    )
+    if not intent_ids:
+        return True
+    if storage is None:
+        try:
+            storage = configured_media_storage()
+        except StorageOperationError:
+            return False
+
+    completed = True
+    for intent_id in intent_ids:
+        claim = _claim_attached_rendition_backfill(intent_id, submission_id)
+        if claim is True:
+            continue
+        if claim is None:
+            completed = False
+            continue
+        outcome = inspect_uploaded_object(
+            storage,
+            bucket=claim.binding.bucket,
+            key=claim.binding.sealed_key,
+            sealed_key=claim.binding.sealed_key,
+            rendition_key=claim.binding.rendition_key,
+            expected_size=claim.expected_size,
+            expected_sha256=claim.expected_sha256,
+            expected_mime=claim.expected_mime,
+        )
+        if not _finish_attached_rendition_backfill(claim, outcome, storage):
+            completed = False
+    return completed
 
 
 def _cleanup_upload_source_after_verification(intent_id, binding, storage):

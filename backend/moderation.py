@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .media import _expire_locked_intent
+from .media import _expire_locked_intent, backfill_attached_renditions
 from .models import (
     CustomUser,
     Image,
@@ -328,7 +328,9 @@ def withdraw_submission(actor, submission_id, idempotency_key):
         return ModerationResult(submission=submission, replayed=False)
 
 
-def _review_submission(actor, submission_id, idempotency_key, comment, operation):
+def _review_submission(
+    actor, submission_id, idempotency_key, comment, operation, *, storage=None
+):
     _validate_actor_shape(actor)
     # Reject non-reviewers before resolving a protected target. Role membership
     # is revalidated from the locked database row below before any write.
@@ -337,6 +339,30 @@ def _review_submission(actor, submission_id, idempotency_key, comment, operation
     key = validate_idempotency_key(idempotency_key)
     normalized_comment = _normalize_comment(comment)
     request_hash = _request_hash(submission_id, normalized_comment)
+
+    if operation == APPROVE_OPERATION:
+        # Authorize the protected target before any compatibility storage work.
+        # Every condition is repeated in the final transaction because these
+        # locks are deliberately released before object-store I/O.
+        with transaction.atomic():
+            submission = _locked_submission(submission_id)
+            locked_actor = _locked_actor(actor)
+            if not is_moderator(locked_actor):
+                raise ModerationPermissionDenied("moderator permission required")
+            if submission.owner_id == locked_actor.pk:
+                raise ModerationPermissionDenied(
+                    "reviewers cannot review their own submission"
+                )
+            existing = _replayed_record(
+                locked_actor, operation, key, request_hash, submission
+            )
+            if existing is not None:
+                return _result_from_replay(submission, existing)
+            if submission.state != Request.State.PENDING:
+                raise SubmissionStateError(
+                    "only a pending submission can be reviewed"
+                )
+        backfill_attached_renditions(submission.pk, storage=storage)
 
     with transaction.atomic():
         submission = _locked_submission(submission_id)
@@ -408,9 +434,16 @@ def _review_submission(actor, submission_id, idempotency_key, comment, operation
         )
 
 
-def approve_submission(actor, submission_id, idempotency_key, comment=None):
+def approve_submission(
+    actor, submission_id, idempotency_key, comment=None, *, storage=None
+):
     return _review_submission(
-        actor, submission_id, idempotency_key, comment, APPROVE_OPERATION
+        actor,
+        submission_id,
+        idempotency_key,
+        comment,
+        APPROVE_OPERATION,
+        storage=storage,
     )
 
 

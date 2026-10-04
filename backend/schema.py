@@ -60,7 +60,7 @@ from .moderation import (
     reject_submission,
     withdraw_submission,
 )
-from .public_media import revoke_public_media
+from .public_media import published_media_prefetch, revoke_public_media
 from .moderation_queue import (
     LEGACY_PAGE_SIZE,
     ModerationQueueInputError,
@@ -553,7 +553,7 @@ class Query(graphene.ObjectType):
     def resolve_places(root, info):
         # Deprecated and intentionally unbounded until smokemap-webapp#10
         # moves clients to the bounded search API (#105).
-        return Place.objects.all()
+        return Place.objects.prefetch_related(published_media_prefetch())
     
     def resolve_places_names(root, info):
         # Deprecated compatibility surface for the old client-side search.
@@ -566,7 +566,11 @@ class Query(graphene.ObjectType):
         return Place.objects.get(pk=id)
     
     def resolve_places_by_name(root, info, name):
-        return Place.objects.filter(name=name).order_by("pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
+        return (
+            Place.objects.filter(name=name)
+            .order_by("pk")
+            .prefetch_related(published_media_prefetch())[:LEGACY_PUBLIC_PLACE_LIMIT]
+        )
     
     def resolve_places_startWith_name(root, info, name):
         try:
@@ -576,6 +580,7 @@ class Query(graphene.ObjectType):
         return (
             Place.objects.annotate(normalized_name=Lower("name"))
             .filter(normalized_name__startswith=normalized_query)
+            .prefetch_related(published_media_prefetch())
             .order_by("normalized_name", "pk")[:LEGACY_PUBLIC_PLACE_LIMIT]
         )
     

@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser
+from django.db import connection
 from django.test import RequestFactory, SimpleTestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from PIL import Image as PillowImage
 
 from .media import inspect_uploaded_object, process_media_cleanup
@@ -140,6 +142,21 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
             }
         )
 
+    def publish_additional_media_place(self, *, name, longitude):
+        submission = self.create_pending(name=name, longitude=longitude)
+        intent, _image = self.attach_media(submission)
+        MediaUploadIntent.objects.filter(pk=intent.pk).update(
+            rendition_byte_size=len(self.body),
+            rendition_sha256=hashlib.sha256(self.body).hexdigest(),
+            rendition_mime="image/png",
+        )
+        return approve_submission(
+            self.moderator,
+            submission.pk,
+            f"approve-{uuid.uuid4().hex}",
+            "Safe publication",
+        )
+
     def test_approval_publishes_one_safe_record_and_replay_does_not_duplicate(self):
         first = self.approve()
         replay = self.approve()
@@ -153,6 +170,120 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
         self.assertEqual(rendition.intent, self.intent)
         self.assertEqual(rendition.state, PublicMediaRendition.State.PUBLISHED)
         self.assertEqual(PublicMediaRendition.objects.count(), 1)
+
+    def test_approval_backfills_a_pre_rendition_attached_image_idempotently(self):
+        digest = hashlib.sha256(self.body).hexdigest()
+        MediaUploadIntent.objects.filter(pk=self.intent.pk).update(
+            server_byte_size=len(self.body),
+            server_sha256=digest,
+            detected_mime="image/png",
+            width=2,
+            height=2,
+            rendition_byte_size=None,
+            rendition_sha256="",
+            rendition_mime="",
+        )
+        Image.objects.filter(pk=self.image.pk).update(
+            byte_size=len(self.body),
+            sha256=digest,
+            detected_mime="image/png",
+            width=2,
+            height=2,
+        )
+        storage = FakeMediaStorage(
+            {self.intent.sealed_object_key: self.body}
+        )
+
+        first = approve_submission(
+            self.moderator,
+            self.submission.pk,
+            "approve-migrated-media",
+            "Safe publication",
+            storage=storage,
+        )
+        replay = approve_submission(
+            self.moderator,
+            self.submission.pk,
+            "approve-migrated-media",
+            "Safe publication",
+            storage=storage,
+        )
+
+        self.intent.refresh_from_db()
+        self.assertFalse(first.replayed)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(
+            storage.read_calls,
+            [(self.intent.storage_bucket, self.intent.sealed_object_key)],
+        )
+        rendition_body = storage.objects[self.intent.rendition_object_key]
+        with PillowImage.open(io.BytesIO(rendition_body)) as decoded:
+            decoded.load()
+            self.assertEqual(decoded.size, (2, 2))
+        self.assertEqual(self.intent.rendition_byte_size, len(rendition_body))
+        self.assertEqual(
+            self.intent.rendition_sha256,
+            hashlib.sha256(rendition_body).hexdigest(),
+        )
+        self.assertEqual(self.intent.rendition_mime, "image/png")
+        self.assertEqual(PublicMediaRendition.objects.count(), 1)
+
+    def test_anonymous_rest_place_media_uses_one_filtered_prefetch_query(self):
+        self.approve()
+        self.publish_additional_media_place(name="Graph shared", longitude=-78.0)
+        self.publish_additional_media_place(name="Graph shared", longitude=-79.0)
+
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get("/places/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["features"]), 3)
+        media_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "backend_publicmediarendition"' in query["sql"]
+        ]
+        self.assertEqual(len(media_queries), 1)
+        self.assertIn("position", media_queries[0])
+
+    def test_anonymous_graphql_place_lists_use_one_media_prefetch_query(self):
+        self.approve()
+        self.publish_additional_media_place(name="Graph shared", longitude=-78.0)
+        self.publish_additional_media_place(name="Graph shared", longitude=-79.0)
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+        cases = (
+            ("{ places { id media { publicId } } }", None, "places", 3),
+            (
+                "query($name: String!) { placesByName(name: $name) { id media { publicId } } }",
+                {"name": "Graph shared"},
+                "placesByName",
+                2,
+            ),
+            (
+                "query($name: String!) { placesStartwithName(name: $name) { id media { publicId } } }",
+                {"name": "graph"},
+                "placesStartwithName",
+                2,
+            ),
+        )
+
+        for query, variables, field, expected_count in cases:
+            with self.subTest(field=field):
+                with CaptureQueriesContext(connection) as captured:
+                    result = schema.execute(
+                        query,
+                        variable_values=variables,
+                        context_value=request,
+                    )
+                self.assertIsNone(result.errors)
+                self.assertEqual(len(result.data[field]), expected_count)
+                media_queries = [
+                    item["sql"]
+                    for item in captured.captured_queries
+                    if 'FROM "backend_publicmediarendition"' in item["sql"]
+                ]
+                self.assertEqual(len(media_queries), 1)
 
     def test_public_rest_and_graphql_metadata_expose_only_application_fields(self):
         result = self.approve()

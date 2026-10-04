@@ -3,6 +3,7 @@ import uuid
 from dataclasses import dataclass
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from .media import MAX_MEDIA_BYTES, _expire_locked_intent
@@ -48,6 +49,17 @@ class PublicMediaPayload:
 class PublicMediaRevocationResult:
     rendition: PublicMediaRendition
     replayed: bool
+
+
+def published_media_prefetch():
+    """Return the public-only, stable-order place media prefetch."""
+    return Prefetch(
+        "public_media",
+        queryset=PublicMediaRendition.objects.filter(
+            state=PublicMediaRendition.State.PUBLISHED
+        ).order_by("position", "pk"),
+        to_attr="_published_media",
+    )
 
 
 def _public_uuid(value):

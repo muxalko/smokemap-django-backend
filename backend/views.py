@@ -28,7 +28,11 @@ from backend.place_search import (
     parse_search_limit,
     search_places,
 )
-from backend.public_media import PublicMediaUnavailable, retrieve_public_media
+from backend.public_media import (
+    PublicMediaUnavailable,
+    published_media_prefetch,
+    retrieve_public_media,
+)
 
 
 VIEWPORT_MAX_SPAN_DEGREES = 10
@@ -255,7 +259,9 @@ class PlaceViewSet(viewsets.ModelViewSet):
         addresses=addresses_queryset.values_list('id')
         places_queryset = Place.objects.filter(
             address_id__in=addresses
-        ).select_related("category")
+        ).select_related("category").prefetch_related(
+            published_media_prefetch()
+        )
         return places_queryset
     
     serializer_class = PlaceSerializer
