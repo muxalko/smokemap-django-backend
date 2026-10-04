@@ -134,6 +134,14 @@ def retrieve_public_media(public_id, *, storage=None):
             public_id=identifier,
             intent=locked_intent,
         ).first()
+        approval_linked = bool(
+            rendition
+            and SubmissionIdempotency.objects.select_for_update().filter(
+                submission=submission,
+                operation=SubmissionOperation.APPROVE,
+                original_result__place_id=rendition.place_id,
+            ).exists()
+        )
         if (
             submission is None
             or locked_intent is None
@@ -144,6 +152,7 @@ def retrieve_public_media(public_id, *, storage=None):
             or locked_intent.state != MediaUploadIntent.State.ATTACHED
             or rendition.state != PublicMediaRendition.State.PUBLISHED
             or rendition.place_id is None
+            or not approval_linked
             or rendition.source_image_id != image.pk
             or image.request_id != submission.pk
             or image.storage_key != locked_intent.sealed_object_key
@@ -235,6 +244,11 @@ def revoke_public_media(actor, public_id, idempotency_key):
             or rendition.state != PublicMediaRendition.State.PUBLISHED
             or rendition.source_image_id != image.pk
             or rendition.place_id is None
+            or not SubmissionIdempotency.objects.select_for_update().filter(
+                submission=submission,
+                operation=SubmissionOperation.APPROVE,
+                original_result__place_id=rendition.place_id,
+            ).exists()
         ):
             raise SubmissionStateError("public media is not currently published")
 

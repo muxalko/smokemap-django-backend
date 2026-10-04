@@ -215,6 +215,30 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
         with self.assertRaises(SubmissionNotFound):
             retrieve_public_media(rendition.public_id, storage=storage)
 
+    def test_anonymous_http_delivery_is_app_controlled_and_non_cacheable(self):
+        self.approve()
+        rendition = PublicMediaRendition.objects.get()
+        storage = self.storage()
+
+        with patch(
+            "backend.public_media.configured_media_storage", return_value=storage
+        ):
+            response = self.client.get(f"/api/v1/media/{rendition.public_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, self.body)
+        self.assertEqual(response["Content-Type"], "image/png")
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(response["X-Content-Type-Options"], "nosniff")
+        self.assertNotIn(self.intent.rendition_object_key, repr(response.headers))
+
+        revoke_public_media(self.administrator, rendition.public_id, "http-revoke")
+        with patch(
+            "backend.public_media.configured_media_storage", return_value=storage
+        ):
+            revoked = self.client.get(f"/api/v1/media/{rendition.public_id}/")
+        self.assertEqual(revoked.status_code, 404)
+
     def test_retrieval_storage_failure_is_non_secret_and_does_not_mutate_publication(self):
         self.approve()
         rendition = PublicMediaRendition.objects.get()
