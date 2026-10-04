@@ -6,6 +6,7 @@ import json
 import math
 
 from django.contrib.gis.geos import Polygon
+from django.http import Http404, HttpResponse
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -27,6 +28,7 @@ from backend.place_search import (
     parse_search_limit,
     search_places,
 )
+from backend.public_media import PublicMediaUnavailable, retrieve_public_media
 
 
 VIEWPORT_MAX_SPAN_DEGREES = 10
@@ -133,7 +135,9 @@ class ViewportPlaceView(APIView):
                 status=400,
             )
 
-        payload = ViewportPlaceSerializer(places, many=True).data
+        payload = ViewportPlaceSerializer(
+            places, many=True, context={"request": request}
+        ).data
         encoded_size = len(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
                 "utf-8"
@@ -171,9 +175,35 @@ class PlaceSearchView(APIView):
             {
                 "query": normalized_query,
                 "limit": limit,
-                "results": PlaceSearchResultSerializer(places, many=True).data,
+                "results": PlaceSearchResultSerializer(
+                    places, many=True, context={"request": request}
+                ).data,
             }
         )
+
+
+class PublicMediaRenditionView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, public_id):
+        try:
+            payload = retrieve_public_media(public_id)
+        except SubmissionOperationError as error:
+            raise Http404("public media not found") from error
+        except PublicMediaUnavailable:
+            return Response(
+                {
+                    "code": "public_media_unavailable",
+                    "detail": "Public media is temporarily unavailable.",
+                },
+                status=503,
+            )
+        response = HttpResponse(payload.body, content_type=payload.mime_type)
+        response["Content-Length"] = str(payload.byte_size)
+        response["Cache-Control"] = "no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        response["Content-Disposition"] = "inline"
+        return response
 
 class LocationViewSet(mixins.RetrieveModelMixin,
                     mixins.ListModelMixin,

@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import re
 import tempfile
@@ -15,6 +16,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from PIL import Image as PillowImage
+from PIL import ImageOps
 from PIL import UnidentifiedImageError
 
 from .media_storage import (
@@ -70,6 +72,9 @@ class InspectedMedia:
     detected_mime: str
     width: int
     height: int
+    rendition_byte_size: int
+    rendition_sha256: str
+    rendition_mime: str
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,7 @@ class MediaBinding:
     bucket: str
     upload_key: str
     sealed_key: str
+    rendition_key: str
     expected_mime: str
     expected_size: int
     expected_sha256: str
@@ -100,6 +106,7 @@ class CleanupClaim:
     bucket: str
     upload_key: str
     sealed_key: str
+    rendition_key: str
     submission_id: int
     owner_id: int
 
@@ -110,6 +117,7 @@ class UploadCleanupClaim:
     bucket: str
     upload_key: str
     sealed_key: str
+    rendition_key: str
 
 
 @dataclass(frozen=True)
@@ -207,6 +215,7 @@ def _binding_for_intent(intent):
         bucket=intent.storage_bucket,
         upload_key=intent.object_key,
         sealed_key=intent.sealed_object_key,
+        rendition_key=intent.rendition_object_key,
         expected_mime=intent.expected_mime,
         expected_size=intent.declared_byte_size,
         expected_sha256=intent.declared_sha256,
@@ -374,6 +383,9 @@ def create_upload_intent(
             object_key=f"submission-media/{submission.pk}/{uuid.uuid4().hex}",
             sealed_object_key=(
                 f"submission-media-sealed/{submission.pk}/{uuid.uuid4().hex}"
+            ),
+            rendition_object_key=(
+                f"submission-media-renditions/{submission.pk}/{uuid.uuid4().hex}"
             ),
             expected_mime=mime_type,
             declared_byte_size=declared_byte_size,
@@ -566,12 +578,52 @@ def _signature_mime(header):
     return ""
 
 
+def _sanitized_rendition(decoded, detected_mime):
+    """Re-encode decoded pixels without carrying source metadata forward."""
+    transposed = ImageOps.exif_transpose(decoded)
+    sanitized = transposed.copy()
+    sanitized.info.clear()
+    output = tempfile.SpooledTemporaryFile(max_size=MAX_MEDIA_BYTES + 1)
+    try:
+        if detected_mime == "image/jpeg":
+            if sanitized.mode not in {"L", "RGB", "CMYK"}:
+                sanitized = sanitized.convert("RGB")
+            sanitized.save(output, format="JPEG", quality=85, optimize=True)
+        elif detected_mime == "image/png":
+            sanitized.save(output, format="PNG", optimize=True)
+        elif detected_mime == "image/webp":
+            sanitized.save(output, format="WEBP", quality=85, method=4)
+        else:
+            return None, "rendition_mime_invalid"
+        rendition_size = output.tell()
+        if not 1 <= rendition_size <= MAX_MEDIA_BYTES:
+            return None, "rendition_size_exceeded"
+        output.seek(0)
+        rendition_bytes = output.read()
+        return (
+            {
+                "body": rendition_bytes,
+                "byte_size": rendition_size,
+                "sha256": hashlib.sha256(rendition_bytes).hexdigest(),
+                "mime": detected_mime,
+                "width": sanitized.width,
+                "height": sanitized.height,
+            },
+            "",
+        )
+    except (OSError, ValueError, MemoryError, OverflowError):
+        return None, "rendition_encode_failed"
+    finally:
+        output.close()
+
+
 def inspect_uploaded_object(
     storage,
     *,
     bucket,
     key,
     sealed_key,
+    rendition_key,
     expected_size,
     expected_sha256,
     expected_mime,
@@ -635,6 +687,9 @@ def inspect_uploaded_object(
                 temporary.seek(0)
                 with PillowImage.open(temporary) as decoded:
                     decoded.load()
+                    rendition, rendition_error = _sanitized_rendition(
+                        decoded, detected_mime
+                    )
         except (
             UnidentifiedImageError,
             OSError,
@@ -648,6 +703,9 @@ def inspect_uploaded_object(
             return InspectionOutcome(failure_code="image_decode_failed")
         if detected_mime != signature_mime or detected_mime != expected_mime:
             return InspectionOutcome(failure_code="mime_mismatch")
+        if rendition_error:
+            return InspectionOutcome(failure_code=rendition_error)
+        width, height = rendition["width"], rendition["height"]
         temporary.seek(0)
         sealed = False
         try:
@@ -663,6 +721,20 @@ def inspect_uploaded_object(
                 return InspectionOutcome(
                     failure_code="sealed_object_size_mismatch", sealed=True
                 )
+            storage.seal_object(
+                bucket=bucket,
+                key=rendition_key,
+                body=io.BytesIO(rendition["body"]),
+                content_type=rendition["mime"],
+                content_length=rendition["byte_size"],
+            )
+            if (
+                storage.object_size(bucket=bucket, key=rendition_key)
+                != rendition["byte_size"]
+            ):
+                return InspectionOutcome(
+                    failure_code="rendition_object_size_mismatch", sealed=True
+                )
         except (StorageObjectNotFound, StorageOperationError):
             return InspectionOutcome(
                 failure_code="object_seal_failed", sealed=sealed
@@ -674,6 +746,9 @@ def inspect_uploaded_object(
                 detected_mime=detected_mime,
                 width=width,
                 height=height,
+                rendition_byte_size=rendition["byte_size"],
+                rendition_sha256=rendition["sha256"],
+                rendition_mime=rendition["mime"],
             ),
             sealed=True,
         )
@@ -757,6 +832,7 @@ def _intent_has_exact_object_binding(intent, binding):
         current.bucket,
         current.upload_key,
         current.sealed_key,
+        current.rendition_key,
     ) == (
         binding.submission_id,
         binding.owner_id,
@@ -764,6 +840,7 @@ def _intent_has_exact_object_binding(intent, binding):
         binding.bucket,
         binding.upload_key,
         binding.sealed_key,
+        binding.rendition_key,
     )
 
 
@@ -810,19 +887,19 @@ def _claim_stale_seal_cleanup_locked(intent, binding):
 
 
 def _run_stale_seal_cleanup_claim(claim, storage):
-    deleted = False
+    deleted = True
     error_code = ""
-    try:
-        storage.delete_object(
-            bucket=claim.binding.bucket, key=claim.binding.sealed_key
-        )
-        deleted = storage.object_is_absent(
-            bucket=claim.binding.bucket, key=claim.binding.sealed_key
-        )
-        if not deleted:
-            error_code = "sealed_object_still_present"
-    except StorageOperationError:
-        error_code = "sealed_cleanup_failed"
+    for object_key in (claim.binding.sealed_key, claim.binding.rendition_key):
+        try:
+            storage.delete_object(bucket=claim.binding.bucket, key=object_key)
+            if not storage.object_is_absent(
+                bucket=claim.binding.bucket, key=object_key
+            ):
+                deleted = False
+                error_code = error_code or "sealed_object_still_present"
+        except StorageOperationError:
+            deleted = False
+            error_code = error_code or "sealed_cleanup_failed"
 
     with transaction.atomic():
         _submission, intent = _system_locked_parent_and_intent(claim.intent_id)
@@ -917,6 +994,7 @@ def verify_upload(actor, intent_id, idempotency_key, *, storage=None):
         bucket=binding.bucket,
         key=binding.upload_key,
         sealed_key=binding.sealed_key,
+        rendition_key=binding.rendition_key,
         expected_mime=binding.expected_mime,
         expected_size=binding.expected_size,
         expected_sha256=binding.expected_sha256,
@@ -976,11 +1054,15 @@ def verify_upload(actor, intent_id, idempotency_key, *, storage=None):
                 intent.detected_mime = media.detected_mime
                 intent.width = media.width
                 intent.height = media.height
+                intent.rendition_byte_size = media.rendition_byte_size
+                intent.rendition_sha256 = media.rendition_sha256
+                intent.rendition_mime = media.rendition_mime
                 intent.verified_at = now
                 intent.upload_cleanup_pending = True
                 update_fields += [
                     "state", "server_byte_size", "server_sha256", "detected_mime",
                     "width", "height", "verified_at", "upload_cleanup_pending",
+                    "rendition_byte_size", "rendition_sha256", "rendition_mime",
                 ]
                 verified = True
             intent.save(update_fields=update_fields)
@@ -1050,6 +1132,8 @@ def attach_verified_media(actor, intent_id, idempotency_key):
             if not all([
                 intent.server_byte_size, intent.server_sha256, intent.detected_mime,
                 intent.width, intent.height, intent.verified_at,
+                intent.rendition_byte_size, intent.rendition_sha256,
+                intent.rendition_mime,
             ]):
                 raise MediaStateConflict("verified media evidence is incomplete")
             list(
@@ -1175,10 +1259,12 @@ def expire_upload_intent(actor, intent_id, idempotency_key):
         return intent, False
 
 
-def _delete_bound_objects(storage, *, bucket, upload_key, sealed_key):
+def _delete_bound_objects(
+    storage, *, bucket, upload_key, sealed_key, rendition_key
+):
     all_absent = True
     error_code = ""
-    for object_key in (upload_key, sealed_key):
+    for object_key in (upload_key, sealed_key, rendition_key):
         try:
             storage.delete_object(bucket=bucket, key=object_key)
             if not storage.object_is_absent(bucket=bucket, key=object_key):
@@ -1232,6 +1318,7 @@ def cleanup_media_object(actor, intent_id, idempotency_key, *, storage=None):
             intent.storage_bucket,
             intent.object_key,
             intent.sealed_object_key,
+            intent.rendition_object_key,
             intent.submission_id,
             intent.owner_id,
         )
@@ -1242,6 +1329,7 @@ def cleanup_media_object(actor, intent_id, idempotency_key, *, storage=None):
         bucket=binding[0],
         upload_key=binding[1],
         sealed_key=binding[2],
+        rendition_key=binding[3],
     )
 
     with transaction.atomic():
@@ -1252,6 +1340,7 @@ def cleanup_media_object(actor, intent_id, idempotency_key, *, storage=None):
                 intent.storage_bucket,
                 intent.object_key,
                 intent.sealed_object_key,
+                intent.rendition_object_key,
                 intent.submission_id,
                 intent.owner_id,
             ) != binding
@@ -1365,6 +1454,7 @@ def _claim_due_system_cleanup(intent_id, now_override=None):
             bucket=intent.storage_bucket,
             upload_key=intent.object_key,
             sealed_key=intent.sealed_object_key,
+            rendition_key=intent.rendition_object_key,
             submission_id=intent.submission_id,
             owner_id=intent.owner_id,
         )
@@ -1389,6 +1479,7 @@ def _finish_system_cleanup(claim, *, deleted, error_code):
             intent.storage_bucket,
             intent.object_key,
             intent.sealed_object_key,
+            intent.rendition_object_key,
             intent.submission_id,
             intent.owner_id,
         )
@@ -1396,6 +1487,7 @@ def _finish_system_cleanup(claim, *, deleted, error_code):
             claim.bucket,
             claim.upload_key,
             claim.sealed_key,
+            claim.rendition_key,
             claim.submission_id,
             claim.owner_id,
         )
@@ -1441,6 +1533,7 @@ def _run_system_cleanup_claim(claim, storage):
         bucket=claim.bucket,
         upload_key=claim.upload_key,
         sealed_key=claim.sealed_key,
+        rendition_key=claim.rendition_key,
     )
     return _finish_system_cleanup(claim, deleted=deleted, error_code=error_code)
 
@@ -1479,6 +1572,7 @@ def _claim_due_upload_cleanup(intent_id, now_override=None):
             bucket=intent.storage_bucket,
             upload_key=intent.object_key,
             sealed_key=intent.sealed_object_key,
+            rendition_key=intent.rendition_object_key,
         )
 
 
@@ -1502,6 +1596,7 @@ def _run_upload_cleanup_claim(claim, storage):
             or intent.storage_bucket != claim.bucket
             or intent.object_key != claim.upload_key
             or intent.sealed_object_key != claim.sealed_key
+            or intent.rendition_object_key != claim.rendition_key
             or intent.state
             not in {MediaUploadIntent.State.VERIFIED, MediaUploadIntent.State.ATTACHED}
             or not intent.upload_cleanup_pending
