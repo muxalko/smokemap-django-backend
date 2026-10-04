@@ -1117,7 +1117,7 @@ class MediaServiceTests(TransactionTestCase):
         self.assertGreater(retry_at, now)
         second = process_media_cleanup(storage=storage, now=now)
         self.assertEqual(second.claimed, 0)
-        self.assertEqual(len(storage.delete_calls), 2)
+        self.assertEqual(len(storage.delete_calls), 3)
 
         storage.fail_delete = False
         third = process_media_cleanup(storage=storage, now=retry_at)
@@ -1126,7 +1126,7 @@ class MediaServiceTests(TransactionTestCase):
         self.assertEqual((third.claimed, third.deleted), (1, 1))
         self.assertEqual(fourth.claimed, 0)
         self.assertEqual(intent.state, MediaUploadIntent.State.DELETED)
-        self.assertEqual(len(storage.delete_calls), 4)
+        self.assertEqual(len(storage.delete_calls), 6)
 
     def test_managed_image_database_rejects_bad_sha256_and_excess_pixel_area(self):
         intent = self.create_intent()

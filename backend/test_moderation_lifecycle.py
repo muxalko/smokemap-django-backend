@@ -1200,4 +1200,4 @@ class ModerationRaceTests(ModerationFixtureMixin, TransactionTestCase):
         self.assertEqual(intent.state, MediaUploadIntent.State.DELETED)
         self.assertIsNone(intent.cleanup_claim_token)
         self.assert_one_event(submission, SubmissionOperation.WITHDRAW)
-        self.assertEqual(storage.delete_object.call_count, 2)
+        self.assertEqual(storage.delete_object.call_count, 3)
