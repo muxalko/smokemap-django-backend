@@ -11,6 +11,7 @@ from PIL import Image as PillowImage
 from .media import inspect_uploaded_object, process_media_cleanup
 from .media_storage import StorageOperationError
 from .models import (
+    Category,
     Image,
     MediaUploadIntent,
     ModerationAudit,
@@ -109,6 +110,10 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
     reset_sequences = True
 
     def setUp(self):
+        Category.objects.get_or_create(
+            slug="outdoors",
+            defaults={"name": "Outdoors", "description": "Outside."},
+        )
         self.build_fixtures()
         self.submission = self.create_pending()
         self.intent, self.image = self.attach_media(self.submission)
