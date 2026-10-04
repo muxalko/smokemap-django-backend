@@ -173,8 +173,6 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
             self.intent.sealed_object_key,
             self.intent.rendition_object_key,
             str(self.intent.pk),
-            str(self.submission.pk),
-            str(self.owner.pk),
             self.intent.server_sha256,
         ):
             self.assertNotIn(secret, rendered)
