@@ -161,12 +161,13 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
         request.user = AnonymousUser()
 
         serialized = PlaceSerializer(result.place, context={"request": request}).data
-        self.assertEqual(len(serialized["media"]), 1)
+        public_media = serialized["properties"]["media"]
+        self.assertEqual(len(public_media), 1)
         self.assertEqual(
-            set(serialized["media"][0]),
+            set(public_media[0]),
             {"public_id", "url", "position", "mime_type", "byte_size", "width", "height"},
         )
-        rendered = repr(serialized["media"])
+        rendered = repr(public_media)
         for secret in (
             self.intent.object_key,
             self.intent.sealed_object_key,
