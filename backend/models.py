@@ -262,6 +262,7 @@ class SubmissionOperation(models.TextChoices):
     MEDIA_EXPIRE = "media.intent.expire.v3", "Expire media intent"
     MEDIA_CLEANUP = "media.intent.cleanup.v3", "Clean up media object"
     REORDER_MEDIA = "submission.reorder_media.v3", "Reorder submission media"
+    MEDIA_REVOKE = "media.revoke.v4", "Revoke public media"
 
 
 class MediaUploadIntent(models.Model):
@@ -300,6 +301,11 @@ class MediaUploadIntent(models.Model):
     # migration compatibility. Attachments only ever use sealed_object_key.
     object_key = models.CharField(max_length=255, unique=True, editable=False)
     sealed_object_key = models.CharField(max_length=255, unique=True, editable=False)
+    rendition_object_key = models.CharField(
+        max_length=255,
+        unique=True,
+        editable=False,
+    )
     expected_mime = models.CharField(max_length=32, editable=False)
     declared_byte_size = models.PositiveIntegerField(editable=False)
     declared_sha256 = models.CharField(max_length=64, editable=False)
@@ -310,6 +316,15 @@ class MediaUploadIntent(models.Model):
     detected_mime = models.CharField(max_length=32, blank=True, default="", editable=False)
     width = models.PositiveIntegerField(blank=True, null=True, editable=False)
     height = models.PositiveIntegerField(blank=True, null=True, editable=False)
+    rendition_byte_size = models.PositiveIntegerField(
+        blank=True, null=True, editable=False
+    )
+    rendition_sha256 = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    rendition_mime = models.CharField(
+        max_length=32, blank=True, default="", editable=False
+    )
 
     failure_code = models.CharField(max_length=64, blank=True, default="", editable=False)
     failure_at = models.DateTimeField(blank=True, null=True, editable=False)
@@ -380,6 +395,14 @@ class MediaUploadIntent(models.Model):
                 name="media_intent_sealed_key_namespace",
             ),
             models.CheckConstraint(
+                check=models.Q(
+                    rendition_object_key__regex=(
+                        r"^submission-media-renditions/[0-9]+/[0-9a-f]{32}$"
+                    )
+                ),
+                name="media_intent_rendition_key_namespace",
+            ),
+            models.CheckConstraint(
                 check=~models.Q(sealed_object_key=F("object_key")),
                 name="media_intent_upload_sealed_keys_distinct",
             ),
@@ -424,6 +447,22 @@ class MediaUploadIntent(models.Model):
                 name="media_intent_verified_metadata_complete",
             ),
             models.CheckConstraint(
+                check=(
+                    models.Q(
+                        rendition_byte_size__isnull=True,
+                        rendition_sha256="",
+                        rendition_mime="",
+                    )
+                    | models.Q(
+                        rendition_byte_size__gt=0,
+                        rendition_byte_size__lte=5_000_000,
+                        rendition_sha256__regex=r"^[0-9a-f]{64}$",
+                        rendition_mime__in=["image/jpeg", "image/png", "image/webp"],
+                    )
+                ),
+                name="media_intent_rendition_metadata_complete",
+            ),
+            models.CheckConstraint(
                 check=(~models.Q(state="attached") | models.Q(attached_at__isnull=False)),
                 name="media_intent_attached_timestamp_complete",
             ),
@@ -448,6 +487,7 @@ class MediaUploadIntent(models.Model):
                 "storage_bucket",
                 "object_key",
                 "sealed_object_key",
+                "rendition_object_key",
                 "expected_mime",
                 "declared_byte_size",
                 "declared_sha256",
@@ -513,6 +553,7 @@ class SubmissionIdempotency(models.Model):
                             SubmissionOperation.MEDIA_REMOVE,
                             SubmissionOperation.MEDIA_EXPIRE,
                             SubmissionOperation.MEDIA_CLEANUP,
+                            SubmissionOperation.MEDIA_REVOKE,
                         ],
                         media_intent__isnull=False,
                     )
@@ -683,6 +724,7 @@ class ModerationAudit(ImmutableAuditEvent):
     class Action(models.TextChoices):
         APPROVE = "approve", "Approve"
         HARD_DELETE = "hard_delete", "Hard delete"
+        REVOKE_MEDIA = "revoke_media", "Revoke public media"
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -868,6 +910,89 @@ class Image(models.Model):
 
     def __str__(self):
         return self.url
+
+
+class PublicMediaRendition(models.Model):
+    class State(models.TextChoices):
+        PUBLISHED = "published", "Published"
+        REVOKED = "revoked", "Revoked"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    place = models.ForeignKey(
+        Place,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="public_media",
+    )
+    source_image = models.OneToOneField(
+        Image,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="public_rendition",
+    )
+    intent = models.OneToOneField(
+        MediaUploadIntent,
+        on_delete=models.PROTECT,
+        related_name="public_rendition",
+    )
+    state = models.CharField(
+        max_length=16,
+        choices=State.choices,
+        default=State.PUBLISHED,
+    )
+    position = models.PositiveSmallIntegerField()
+    mime_type = models.CharField(max_length=32, editable=False)
+    byte_size = models.PositiveIntegerField(editable=False)
+    width = models.PositiveIntegerField(editable=False)
+    height = models.PositiveIntegerField(editable=False)
+    published_at = models.DateTimeField(default=timezone.now, editable=False)
+    revoked_at = models.DateTimeField(blank=True, null=True, editable=False)
+
+    class Meta:
+        ordering = ["position", "pk"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("place", "position"),
+                condition=models.Q(state="published"),
+                name="unique_published_media_position",
+            ),
+            models.CheckConstraint(
+                check=models.Q(position__gte=0, position__lt=3),
+                name="public_media_position_range",
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    mime_type__in=["image/jpeg", "image/png", "image/webp"]
+                ),
+                name="public_media_mime_allowed",
+            ),
+            models.CheckConstraint(
+                check=models.Q(byte_size__gt=0, byte_size__lte=5_000_000),
+                name="public_media_size_range",
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    width__gt=0,
+                    width__lte=10_000,
+                    height__gt=0,
+                    height__lte=10_000,
+                )
+                & LessThanOrEqual(F("width") * F("height"), Value(25_000_000)),
+                name="public_media_dimensions_range",
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        state="published",
+                        place__isnull=False,
+                        source_image__isnull=False,
+                        revoked_at__isnull=True,
+                    )
+                    | models.Q(state="revoked", revoked_at__isnull=False)
+                ),
+                name="public_media_state_evidence",
+            ),
+        ]
     
 
 class Location(models.Model):

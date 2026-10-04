@@ -15,6 +15,11 @@ router.register(r'locations', views.LocationViewSet, basename='location')
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
+    path(
+        'api/v1/media/<uuid:public_id>/',
+        views.PublicMediaRenditionView.as_view(),
+        name='public-media-rendition',
+    ),
     path('api/v1/places/search/', views.PlaceSearchView.as_view(), name='place-search'),
     path('api/v1/places/', views.ViewportPlaceView.as_view(), name='viewport-places'),
     path('', include(router.urls)),

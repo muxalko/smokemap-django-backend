@@ -621,17 +621,25 @@ class MediaServiceTests(TransactionTestCase):
             verified.upload_cleanup_next_attempt_at, verified.presign_expires_at
         )
         self.assertEqual(storage.objects[verified.sealed_object_key], body)
-        self.assertNotIn(verified.object_key, storage.objects)
+        rendition_body = storage.objects[verified.rendition_object_key]
+        self.assertEqual(len(rendition_body), verified.rendition_byte_size)
         self.assertEqual(
-            storage.seal_calls,
-            [(
+            hashlib.sha256(rendition_body).hexdigest(), verified.rendition_sha256
+        )
+        self.assertEqual(verified.rendition_mime, "image/png")
+        self.assertNotIn(verified.object_key, storage.objects)
+        self.assertEqual(len(storage.seal_calls), 2)
+        self.assertEqual(
+            storage.seal_calls[0],
+            (
                 intent.storage_bucket,
                 intent.sealed_object_key,
                 "image/png",
                 len(body),
                 body,
-            )],
+            ),
         )
+        self.assertEqual(storage.seal_calls[1][1], intent.rendition_object_key)
 
         replay, replayed = verify_upload(
             self.owner, intent.pk, "verify-1", storage=storage
@@ -718,6 +726,7 @@ class MediaServiceTests(TransactionTestCase):
         self.assertEqual(cleaned.state, MediaUploadIntent.State.DELETED)
         self.assertNotIn(intent.object_key, storage.objects)
         self.assertNotIn(intent.sealed_object_key, storage.objects)
+        self.assertNotIn(intent.rendition_object_key, storage.objects)
         self.assertFalse(Image.objects.filter(intent=intent).exists())
 
     def test_source_cleanup_failure_retries_without_blocking_sealed_attachment(self):
@@ -776,6 +785,7 @@ class MediaServiceTests(TransactionTestCase):
         self.assertEqual(storage.delete_calls, [
             (intent.storage_bucket, intent.object_key),
             (intent.storage_bucket, intent.sealed_object_key),
+            (intent.storage_bucket, intent.rendition_object_key),
         ])
 
     def test_cleanup_failure_keeps_exact_retry_metadata_and_same_key_replays(self):
@@ -1021,6 +1031,7 @@ class MediaServiceTests(TransactionTestCase):
         self.assertEqual(storage.delete_calls, [
             (intent.storage_bucket, intent.object_key),
             (intent.storage_bucket, intent.sealed_object_key),
+            (intent.storage_bucket, intent.rendition_object_key),
         ])
         self.assertEqual(SubmissionIdempotency.objects.filter(media_intent=intent).count(), 2)
         self.assertNotIn(intent.object_key, rendered)
@@ -1152,6 +1163,7 @@ class MediaServiceTests(TransactionTestCase):
             {"object_key": f"client-chosen/{uuid.uuid4().hex}"},
             {"sealed_object_key": f"submission-media/{self.submission.pk}/{uuid.uuid4().hex}"},
             {"sealed_object_key": intent.object_key},
+            {"rendition_object_key": f"client-chosen/{uuid.uuid4().hex}"},
         ]
         for values in invalid_updates:
             with self.assertRaises(IntegrityError), transaction.atomic():
@@ -1159,6 +1171,9 @@ class MediaServiceTests(TransactionTestCase):
         intent.refresh_from_db()
         self.assertTrue(intent.object_key.startswith("submission-media/"))
         self.assertTrue(intent.sealed_object_key.startswith("submission-media-sealed/"))
+        self.assertTrue(
+            intent.rendition_object_key.startswith("submission-media-renditions/")
+        )
 
     def test_corrupt_truncated_dimension_area_and_bomb_inputs_fail_decode_safely(self):
         samples = [
@@ -1175,6 +1190,7 @@ class MediaServiceTests(TransactionTestCase):
                 bucket="bucket",
                 key="key",
                 sealed_key="submission-media-sealed/1/00000000000000000000000000000000",
+                rendition_key="submission-media-renditions/1/00000000000000000000000000000000",
                 expected_size=len(body),
                 expected_sha256=hashlib.sha256(body).hexdigest(),
                 expected_mime="image/png",
@@ -1200,6 +1216,9 @@ class MediaServiceTests(TransactionTestCase):
                 key="key",
                 sealed_key=(
                     "submission-media-sealed/1/00000000000000000000000000000000"
+                ),
+                rendition_key=(
+                    "submission-media-renditions/1/00000000000000000000000000000000"
                 ),
                 expected_size=len(body),
                 expected_sha256=hashlib.sha256(body).hexdigest(),

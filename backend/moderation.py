@@ -20,6 +20,7 @@ from .models import (
     Location,
     MediaUploadIntent,
     Place,
+    PublicMediaRendition,
     Request,
     RequestTag,
     SubmissionIdempotency,
@@ -30,6 +31,7 @@ from .models import (
 from .permissions import is_administrator, is_moderator
 from .submissions import (
     DuplicateSubmission,
+    MediaNotReady,
     SubmissionAuthenticationRequired,
     SubmissionInputError,
     SubmissionNotFound,
@@ -186,7 +188,7 @@ def _assert_no_nearby_public_duplicate(submission, canonical):
             )
 
 
-def _promote_tags_and_materialize_place(submission):
+def _promote_tags_and_materialize_place(submission, managed_images):
     links = list(
         RequestTag.objects.select_for_update(of=("self",))
         .select_related("tag")
@@ -233,6 +235,32 @@ def _promote_tags_and_materialize_place(submission):
     for image in legacy_images:
         image.place = place
         image.save(update_fields=["place"])
+
+    for image in managed_images:
+        intent = image.intent
+        if (
+            intent is None
+            or intent.state != MediaUploadIntent.State.ATTACHED
+            or image.state != "attached"
+            or image.place_id is not None
+            or image.storage_key != intent.sealed_object_key
+            or not intent.rendition_object_key
+            or not intent.rendition_byte_size
+            or not intent.rendition_sha256
+            or intent.rendition_mime not in {"image/jpeg", "image/png", "image/webp"}
+            or PublicMediaRendition.objects.filter(intent=intent).exists()
+        ):
+            raise MediaNotReady("submission media has no publishable rendition")
+        PublicMediaRendition.objects.create(
+            place=place,
+            source_image=image,
+            intent=intent,
+            position=image.position,
+            mime_type=intent.rendition_mime,
+            byte_size=intent.rendition_byte_size,
+            width=intent.width,
+            height=intent.height,
+        )
 
     # ``Location`` is the bounded legacy map compatibility record.  The v2
     # viewport reads authoritative Address geometry, but older clients still
@@ -339,8 +367,10 @@ def _review_submission(actor, submission_id, idempotency_key, comment, operation
             # Revalidate and lock retained media before publishing. Pending media
             # is immutable through the API, but this also fails closed on corrupt
             # historical rows and serializes with autonomous source cleanup.
-            _require_ready_media(submission.owner, submission)
-            place = _promote_tags_and_materialize_place(submission)
+            managed_images = _require_ready_media(submission.owner, submission)
+            place = _promote_tags_and_materialize_place(
+                submission, managed_images
+            )
             submission.state = Request.State.APPROVED
             submission.approved = True
             submission.date_approved = timezone.now()
