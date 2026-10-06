@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.db import connection
 from django.test import RequestFactory, SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
 from PIL import Image as PillowImage
 
 from .media import inspect_uploaded_object, process_media_cleanup
@@ -30,7 +32,6 @@ from .public_media import (
     revoke_public_media,
 )
 from .schema import schema
-from .serializers import PlaceSerializer
 from .submissions import SubmissionNotFound
 from .test_media import FakeMediaStorage, encoded_image
 from .test_moderation_lifecycle import ModerationFixtureMixin, PRIVATE_MEDIA_SETTINGS
@@ -285,46 +286,88 @@ class PublicMediaContractTests(ModerationFixtureMixin, TransactionTestCase):
                 ]
                 self.assertEqual(len(media_queries), 1)
 
-    def test_public_rest_and_graphql_metadata_expose_only_application_fields(self):
+    def test_rest_public_media_url_is_relative_and_origin_independent(self):
         result = self.approve()
         rendition = PublicMediaRendition.objects.get()
-        request = RequestFactory().get("/")
-        request.user = AnonymousUser()
 
-        serialized = PlaceSerializer(result.place, context={"request": request}).data
-        public_media = serialized["properties"]["media"]
-        self.assertEqual(len(public_media), 1)
+        response = self.client.get(
+            f"/places/{result.place.pk}/",
+            HTTP_HOST="backend:8000",
+            HTTP_X_FORWARDED_HOST="spoofed.example",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        public_media = response.json()["properties"]["media"]
         self.assertEqual(
             set(public_media[0]),
             {"public_id", "url", "position", "mime_type", "byte_size", "width", "height"},
+        )
+        self.assertEqual(
+            public_media[0]["url"],
+            reverse(
+                "public-media-rendition", kwargs={"public_id": rendition.public_id}
+            ),
         )
         rendered = repr(public_media)
         for secret in (
             self.intent.object_key,
             self.intent.sealed_object_key,
             self.intent.rendition_object_key,
-            str(self.intent.pk),
+            self.intent.storage_bucket,
             self.intent.server_sha256,
+            "backend:8000",
+            "spoofed.example",
         ):
             self.assertNotIn(secret, rendered)
 
-        graphql = schema.execute(
-            """
-            query PublicPlace($id: ID!) {
-              placeById(id: $id) {
-                media { publicId url position mimeType byteSize width height }
-              }
-            }
-            """,
-            variable_values={"id": str(result.place.pk)},
-            context_value=request,
+    def test_graphql_public_media_url_is_relative_and_origin_independent(self):
+        result = self.approve()
+        rendition = PublicMediaRendition.objects.get()
+
+        response = self.client.post(
+            "/graphql/",
+            data=json.dumps(
+                {
+                    "query": """
+                        query PublicPlace($id: ID!) {
+                          placeById(id: $id) {
+                            media { publicId url position mimeType byteSize width height }
+                          }
+                        }
+                    """,
+                    "variables": {"id": str(result.place.pk)},
+                }
+            ),
+            content_type="application/json",
+            HTTP_HOST="backend:8000",
+            HTTP_X_FORWARDED_HOST="spoofed.example",
         )
-        self.assertIsNone(graphql.errors)
+
+        self.assertEqual(response.status_code, 200)
+        graphql = response.json()
+        self.assertNotIn("errors", graphql)
+        public_media = graphql["data"]["placeById"]["media"]
         self.assertEqual(
-            graphql.data["placeById"]["media"][0]["publicId"],
+            public_media[0]["publicId"],
             str(rendition.public_id),
         )
-        self.assertIn(f"/api/v1/media/{rendition.public_id}/", repr(graphql.data))
+        self.assertEqual(
+            public_media[0]["url"],
+            reverse(
+                "public-media-rendition", kwargs={"public_id": rendition.public_id}
+            ),
+        )
+        rendered = repr(public_media)
+        for secret in (
+            self.intent.object_key,
+            self.intent.sealed_object_key,
+            self.intent.rendition_object_key,
+            self.intent.storage_bucket,
+            self.intent.server_sha256,
+            "backend:8000",
+            "spoofed.example",
+        ):
+            self.assertNotIn(secret, rendered)
 
     def test_anonymous_retrieval_rechecks_current_approval_and_exact_binding(self):
         self.approve()

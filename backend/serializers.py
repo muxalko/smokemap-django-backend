@@ -16,11 +16,9 @@ class PublicMediaRenditionSerializer(rest_serializers.ModelSerializer):
     url = rest_serializers.SerializerMethodField()
 
     def get_url(self, value):
-        relative = reverse(
+        return reverse(
             "public-media-rendition", kwargs={"public_id": value.public_id}
         )
-        request = self.context.get("request")
-        return request.build_absolute_uri(relative) if request is not None else relative
 
     class Meta:
         model = PublicMediaRendition
