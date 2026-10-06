@@ -116,13 +116,9 @@ class PublicMediaRenditionType(graphene.ObjectType):
     height = graphene.Int(required=True)
 
     def resolve_url(self, info):
-        relative = reverse(
+        return reverse(
             "public-media-rendition", kwargs={"public_id": self.public_id}
         )
-        request = info.context
-        if request is not None and hasattr(request, "build_absolute_uri"):
-            return request.build_absolute_uri(relative)
-        return relative
 
 
 class PlaceType(DjangoObjectType):
