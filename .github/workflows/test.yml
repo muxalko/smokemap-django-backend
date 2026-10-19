@@ -47,9 +47,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install geospatial libraries
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends binutils gdal-bin libproj-dev
-      - run: python -m pip install --requirement requirements.txt
+      - name: Install development dependencies
+        run: python -m pip install --requirement requirements-dev.txt
+      - name: Check installed dependency compatibility
+        run: python -m pip check
       - run: python manage.py check
       - name: Check migration drift
         run: python manage.py makemigrations --check --dry-run

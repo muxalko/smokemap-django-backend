@@ -7,11 +7,12 @@ baseline; it does not authorize a package, framework, or runtime upgrade.
 ## Authoritative manifests
 
 - `requirements.txt` is the only production/runtime dependency authority.
-  The Dockerfile, CI, and the legacy Vercel build script install it directly.
+  The Dockerfile and legacy Vercel build script install it directly.
 - `requirements-dev.txt` includes `requirements.txt` with pip's `-r` directive.
   Add development-only tools below that directive, with exact `==` pins. A
   package already declared by the runtime manifest must never be repeated or
-  overridden there.
+  overridden there. CI installs this development manifest and runs `pip check`,
+  exercising both supported requirements files together.
 - Pipenv is not a supported install path. The former `Pipfile` and
   `Pipfile.lock` had no tracked caller, declared Python 3.9, and locked a
   dependency graph that disagreed with the runtime manifest, so they were
