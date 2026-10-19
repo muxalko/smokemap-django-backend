@@ -16,6 +16,10 @@ Pull requests and pushes to `development` independently run the Django system
 check and complete backend suite against an isolated PostGIS service. CI also
 scans the full Git history with Gitleaks and redacts any detected values.
 
+[`DEPENDENCIES.md`](DEPENDENCIES.md) defines the production and development
+dependency authority, exact-pin policy, supported install commands, and the
+current no-lockfile strategy.
+
 ## Private submission media operations
 
 Owner-bound draft media uses a private object-storage bucket configured by
