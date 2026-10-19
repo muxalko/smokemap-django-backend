@@ -17,6 +17,9 @@ baseline; it does not authorize a package, framework, or runtime upgrade.
   `Pipfile.lock` had no tracked caller, declared Python 3.9, and locked a
   dependency graph that disagreed with the runtime manifest, so they were
   retired instead of being regenerated or presented as a second authority.
+  The exact locked `fiona` and `pandas` versions remain development
+  dependencies because the tracked `generate_shp.py` utility imports them;
+  unused Pipenv-only packages were not carried forward.
 
 Use one of these commands from a clean Python 3.12 virtual environment:
 

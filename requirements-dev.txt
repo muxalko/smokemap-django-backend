@@ -1,2 +1,6 @@
 # Development and test environments always start with the exact runtime set.
 -r requirements.txt
+
+# Used by the tracked legacy shapefile fixture generator (generate_shp.py).
+fiona==1.9.5
+pandas==2.2.1
