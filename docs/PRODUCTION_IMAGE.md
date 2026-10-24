@@ -84,6 +84,11 @@ values.
 | `MEDIA_STORAGE_INTERNAL_ENDPOINT_URL` | Explicit backend-reachable HTTP(S) endpoint; plain HTTP is only acceptable on an isolated private network |
 | `MEDIA_UPLOAD_ENDPOINT_URL` | Explicit browser-reachable HTTPS endpoint used for presigned upload and preview URLs |
 
+All hostname-bearing staging values reject wildcards, malformed hostnames,
+loopback/link-local addresses, and known development service names. Private
+deployment DNS names and private addresses remain valid for PostGIS and the
+internal media endpoint.
+
 `GDAL_LIBRARY_PATH` and `GEOS_LIBRARY_PATH` remain optional overrides. The
 image discovers its installed libraries when those overrides are absent.
 

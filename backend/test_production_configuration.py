@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import textwrap
+import traceback
 import unittest
 from pathlib import Path
 
@@ -77,11 +78,54 @@ class StagingEnvironmentTests(unittest.TestCase):
 
         self.assertNotIn(exposed_value, str(raised.exception))
 
+    def test_parser_tracebacks_do_not_echo_invalid_values(self):
+        invalid_values = {
+            "POSTGRES_PORT": "sensitive-database-port",
+            "POSTGRES_HOST": "postgres:sensitive-database-host-port",
+            "AWS_S3_ENDPOINT_URL": (
+                "https://objects.example.com:sensitive-public-port"
+            ),
+            "MEDIA_STORAGE_INTERNAL_ENDPOINT_URL": (
+                "https://[sensitive-internal-host"
+            ),
+            "MEDIA_UPLOAD_ENDPOINT_URL": (
+                "https://uploads.example.com:sensitive-upload-port"
+            ),
+        }
+        for name, exposed_value in invalid_values.items():
+            with self.subTest(name=name):
+                caught_error = None
+                try:
+                    self.load(**{name: exposed_value})
+                except ConfigurationError as error:
+                    caught_error = error
+                    rendered = "".join(
+                        traceback.format_exception(type(error), error, error.__traceback__)
+                    )
+                else:
+                    self.fail(f"{name} unexpectedly accepted an invalid value")
+
+                self.assertNotIn(exposed_value, rendered)
+                self.assertIsNone(caught_error.__cause__)
+
     def test_hosts_reject_wildcards_urls_and_development_names(self):
-        for hosts in ("*", ".example.com", "https://api.example.com", "localhost"):
+        for hosts in (
+            "*",
+            ".example.com",
+            "https://api.example.com",
+            "localhost",
+            "127.0.0.2",
+            "api_example.com",
+        ):
             with self.subTest(hosts=hosts):
                 with self.assertRaisesRegex(ConfigurationError, "DJANGO_ALLOWED_HOSTS"):
                     self.load(DJANGO_ALLOWED_HOSTS=hosts)
+
+    def test_hosts_reject_case_insensitive_duplicates(self):
+        with self.assertRaisesRegex(ConfigurationError, "DJANGO_ALLOWED_HOSTS"):
+            self.load(
+                DJANGO_ALLOWED_HOSTS="api.staging.example.com,API.STAGING.EXAMPLE.COM"
+            )
 
     def test_browser_origins_require_https_without_credentials_or_paths(self):
         for origin in (
@@ -89,16 +133,60 @@ class StagingEnvironmentTests(unittest.TestCase):
             "https://user:secret@staging.example.com",
             "https://staging.example.com/path",
             "https://localhost",
+            "https://*.example.com",
+            "https://staging_example.com",
         ):
             with self.subTest(origin=origin):
                 with self.assertRaisesRegex(ConfigurationError, "CORS_ALLOWED_ORIGINS"):
                     self.load(CORS_ALLOWED_ORIGINS=origin)
+
+    def test_browser_origins_reject_semantic_duplicates(self):
+        for origins in (
+            "https://staging.example.com,https://STAGING.EXAMPLE.COM",
+            "https://staging.example.com,https://staging.example.com:443",
+        ):
+            with self.subTest(origins=origins):
+                with self.assertRaisesRegex(ConfigurationError, "CORS_ALLOWED_ORIGINS"):
+                    self.load(CORS_ALLOWED_ORIGINS=origins)
 
     def test_public_storage_endpoints_require_https(self):
         for name in ("AWS_S3_ENDPOINT_URL", "MEDIA_UPLOAD_ENDPOINT_URL"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ConfigurationError, name):
                     self.load(**{name: "http://objects.example.com"})
+
+    def test_storage_endpoints_reject_wildcard_malformed_and_development_hosts(self):
+        for name in (
+            "AWS_S3_ENDPOINT_URL",
+            "MEDIA_STORAGE_INTERNAL_ENDPOINT_URL",
+            "MEDIA_UPLOAD_ENDPOINT_URL",
+        ):
+            for endpoint in (
+                "https://*.example.com",
+                "https://objects_example.com",
+                "https://localhost:9000",
+            ):
+                with self.subTest(name=name, endpoint=endpoint):
+                    with self.assertRaisesRegex(ConfigurationError, name):
+                        self.load(**{name: endpoint})
+
+    def test_postgres_host_rejects_malformed_and_development_values(self):
+        for host in ("*", "localhost", "127.0.0.2", "db", "postgres:5432"):
+            with self.subTest(host=host):
+                with self.assertRaisesRegex(ConfigurationError, "POSTGRES_HOST"):
+                    self.load(POSTGRES_HOST=host)
+
+    def test_private_deployment_addresses_remain_supported(self):
+        configuration = self.load(
+            POSTGRES_HOST="10.0.0.5",
+            MEDIA_STORAGE_INTERNAL_ENDPOINT_URL="http://10.0.0.6:9000",
+        )
+
+        self.assertEqual(configuration.postgres_host, "10.0.0.5")
+        self.assertEqual(
+            configuration.media_storage_internal_endpoint_url,
+            "http://10.0.0.6:9000",
+        )
 
     def test_database_and_storage_boundaries_are_fail_closed(self):
         invalid = (

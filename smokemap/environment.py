@@ -42,7 +42,16 @@ class StagingEnvironment:
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.IGNORECASE)
 _BUCKET_NAME = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_DEVELOPMENT_HOSTS = {"localhost", "127.0.0.1", "::1", "backend", "db", "storage"}
+_DEVELOPMENT_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "backend",
+    "db",
+    "minio",
+    "postgres",
+    "storage",
+}
 
 
 def _required(environ, name):
@@ -63,40 +72,62 @@ def _list(environ, name):
     return values
 
 
+def _validated_hostname(hostname, name):
+    normalized = hostname.rstrip(".").lower()
+    if not normalized or normalized in _DEVELOPMENT_HOSTS or "*" in normalized:
+        raise ConfigurationError(f"{name} contains a development or wildcard host")
+
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        if len(normalized) > 253 or any(
+            _HOST_LABEL.fullmatch(label) is None for label in normalized.split(".")
+        ):
+            raise ConfigurationError(f"{name} contains an invalid host") from None
+    else:
+        if address.is_loopback or address.is_unspecified or address.is_link_local:
+            raise ConfigurationError(f"{name} contains a development host")
+
+    return normalized
+
+
 def _exact_hosts(environ, name):
     hosts = _list(environ, name)
+    normalized_hosts = []
     for host in hosts:
-        lowered = host.lower()
-        if (
-            lowered in _DEVELOPMENT_HOSTS
-            or "*" in host
-            or host.startswith(".")
-            or any(character in host for character in ":/@?#")
-        ):
+        if any(character in host for character in ":/@?#"):
             raise ConfigurationError(f"{name} must contain exact deployment hosts")
-        try:
-            ip_address(host)
-            continue
-        except ValueError:
-            pass
-        if len(host) > 253 or any(
-            _HOST_LABEL.fullmatch(label) is None for label in host.rstrip(".").split(".")
-        ):
-            raise ConfigurationError(f"{name} contains an invalid host")
-    return hosts
+        normalized_hosts.append(_validated_hostname(host, name))
+    if len(set(normalized_hosts)) != len(normalized_hosts):
+        raise ConfigurationError(f"{name} must not contain duplicates")
+    return tuple(normalized_hosts)
+
+
+def _database_host(environ, name):
+    value = _required(environ, name)
+    try:
+        ip_address(value)
+    except ValueError:
+        if any(character in value for character in ":/@?#"):
+            raise ConfigurationError(
+                f"{name} must be a host without a URL or port"
+            ) from None
+    _validated_hostname(value, name)
+    return value
 
 
 def _endpoint(environ, name, *, require_https):
     value = _required(environ, name)
-    parsed = urlsplit(value)
     try:
+        parsed = urlsplit(value)
         parsed_port = parsed.port
-    except ValueError as error:
-        raise ConfigurationError(f"{name} contains an invalid port") from error
+        parsed_hostname = parsed.hostname
+    except ValueError:
+        raise ConfigurationError(f"{name} contains an invalid endpoint") from None
     allowed_schemes = {"https"} if require_https else {"http", "https"}
     if (
         parsed.scheme not in allowed_schemes
-        or not parsed.hostname
+        or not parsed_hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -107,20 +138,22 @@ def _endpoint(environ, name, *, require_https):
         raise ConfigurationError(f"{name} must be an absolute {scheme} endpoint")
     if parsed_port is not None and not 1 <= parsed_port <= 65535:
         raise ConfigurationError(f"{name} contains an invalid port")
+    _validated_hostname(parsed_hostname, name)
     return value.rstrip("/")
 
 
 def _https_origins(environ, name):
     origins = _list(environ, name)
     normalized_origins = []
+    origin_keys = []
     for origin in origins:
         normalized = _endpoint({name: origin}, name, require_https=True)
         if normalized != origin.rstrip("/"):
             raise ConfigurationError(f"{name} contains an invalid origin")
-        if urlsplit(origin).hostname.lower() in _DEVELOPMENT_HOSTS:
-            raise ConfigurationError(f"{name} must not contain development origins")
         normalized_origins.append(origin.rstrip("/"))
-    if len(set(normalized_origins)) != len(normalized_origins):
+        parsed = urlsplit(origin)
+        origin_keys.append((parsed.hostname.lower().rstrip("."), parsed.port or 443))
+    if len(set(origin_keys)) != len(origin_keys):
         raise ConfigurationError(f"{name} must not contain duplicates")
     return tuple(normalized_origins)
 
@@ -136,8 +169,8 @@ def _port(environ, name):
     value = _required(environ, name)
     try:
         port = int(value)
-    except ValueError as error:
-        raise ConfigurationError(f"{name} must be an integer port") from error
+    except ValueError:
+        raise ConfigurationError(f"{name} must be an integer port") from None
     if not 1 <= port <= 65535:
         raise ConfigurationError(f"{name} must be an integer port")
     return port
@@ -176,7 +209,7 @@ def load_staging_environment(environ):
         allowed_hosts=_exact_hosts(environ, "DJANGO_ALLOWED_HOSTS"),
         cors_allowed_origins=_https_origins(environ, "CORS_ALLOWED_ORIGINS"),
         csrf_trusted_origins=_https_origins(environ, "CSRF_TRUSTED_ORIGINS"),
-        postgres_host=_required(environ, "POSTGRES_HOST"),
+        postgres_host=_database_host(environ, "POSTGRES_HOST"),
         postgres_port=_port(environ, "POSTGRES_PORT"),
         postgres_db=_required(environ, "POSTGRES_DB"),
         postgres_user=_required(environ, "POSTGRES_USER"),
