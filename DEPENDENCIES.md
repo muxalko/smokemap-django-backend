@@ -8,6 +8,9 @@ baseline; it does not authorize a package, framework, or runtime upgrade.
 
 - `requirements.txt` is the only production/runtime dependency authority.
   The Dockerfile and legacy Vercel build script install it directly.
+  Gunicorn is an exact-pinned runtime dependency because the Dockerfile's
+  `production` target uses it as the WSGI process manager; development still
+  uses Django's development server.
 - `requirements-dev.txt` includes `requirements.txt` with pip's `-r` directive.
   Add development-only tools below that directive, with exact `==` pins. A
   package already declared by the runtime manifest must never be repeated or
