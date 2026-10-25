@@ -10,6 +10,90 @@ permissions:
   contents: read
 
 jobs:
+  production-image:
+    runs-on: ubuntu-latest
+    env:
+      DJANGO_SECRET_KEY: local-ci-only-production-image-key-with-at-least-fifty-characters
+      DJANGO_ALLOWED_HOSTS: api.staging.example.com
+      CORS_ALLOWED_ORIGINS: https://staging.example.com
+      CSRF_TRUSTED_ORIGINS: https://staging.example.com
+      DJANGO_TRUST_X_FORWARDED_PROTO: "true"
+      POSTGRES_HOST: postgres.internal.example.com
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: smokemap
+      POSTGRES_USER: smokemap
+      POSTGRES_PASSWORD: local-ci-only
+      POSTGRES_OPTIONS: "-c search_path=smokemap"
+      POSTGRES_SSLMODE: verify-full
+      AWS_ACCESS_KEY_ID: local-ci-only
+      AWS_SECRET_ACCESS_KEY: local-ci-only
+      AWS_REGION: us-east-1
+      AWS_STORAGE_BUCKET_NAME: smokemap-public-ci
+      AWS_S3_ENDPOINT_URL: https://objects.staging.example.com
+      AWS_S3_ADDRESSING_STYLE: path
+      MEDIA_STORAGE_BUCKET_NAME: smokemap-private-ci
+      MEDIA_STORAGE_IDENTIFIER: staging-ci
+      MEDIA_STORAGE_INTERNAL_ENDPOINT_URL: http://storage.internal:9000
+      MEDIA_UPLOAD_ENDPOINT_URL: https://uploads.staging.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: >-
+          docker build
+          --target production
+          --build-arg VCS_REF="$GITHUB_SHA"
+          --tag smokemap-backend:ci
+          .
+      - name: Inspect production image contract
+        shell: bash
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' smokemap-backend:ci)" = "smokemap"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' smokemap-backend:ci)" = "$GITHUB_SHA"
+          docker run --rm --entrypoint python smokemap-backend:ci -m pip check
+          docker run --rm --entrypoint python smokemap-backend:ci \
+            -m unittest backend.test_production_configuration backend.test_dependency_manifests -v
+          if docker run --rm --entrypoint python smokemap-backend:ci \
+            -c 'import smokemap.settings'; then
+            echo "staging settings unexpectedly accepted a missing environment" >&2
+            exit 1
+          fi
+      - name: Start Gunicorn and probe liveness
+        shell: bash
+        run: |
+          container_id="$(docker run --detach --rm \
+            --env DJANGO_SECRET_KEY \
+            --env DJANGO_ALLOWED_HOSTS \
+            --env CORS_ALLOWED_ORIGINS \
+            --env CSRF_TRUSTED_ORIGINS \
+            --env DJANGO_TRUST_X_FORWARDED_PROTO \
+            --env POSTGRES_HOST \
+            --env POSTGRES_PORT \
+            --env POSTGRES_DB \
+            --env POSTGRES_USER \
+            --env POSTGRES_PASSWORD \
+            --env POSTGRES_OPTIONS \
+            --env POSTGRES_SSLMODE \
+            --env AWS_ACCESS_KEY_ID \
+            --env AWS_SECRET_ACCESS_KEY \
+            --env AWS_REGION \
+            --env AWS_STORAGE_BUCKET_NAME \
+            --env AWS_S3_ENDPOINT_URL \
+            --env AWS_S3_ADDRESSING_STYLE \
+            --env MEDIA_STORAGE_BUCKET_NAME \
+            --env MEDIA_STORAGE_IDENTIFIER \
+            --env MEDIA_STORAGE_INTERNAL_ENDPOINT_URL \
+            --env MEDIA_UPLOAD_ENDPOINT_URL \
+            smokemap-backend:ci)"
+          trap 'docker logs "$container_id"; docker stop "$container_id" >/dev/null' EXIT
+          for attempt in {1..30}; do
+            if docker exec "$container_id" python -c "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/health/live/', headers={'Host': 'api.staging.example.com', 'X-Forwarded-Proto': 'https'}); assert json.load(urllib.request.urlopen(request, timeout=2)) == {'status': 'ok'}"; then
+              docker exec "$container_id" python manage.py check
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
   test:
     runs-on: ubuntu-latest
     services:

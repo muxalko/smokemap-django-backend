@@ -20,6 +20,11 @@ scans the full Git history with Gitleaks and redacts any detected values.
 dependency authority, exact-pin policy, supported install commands, and the
 current no-lockfile strategy.
 
+[`docs/PRODUCTION_IMAGE.md`](docs/PRODUCTION_IMAGE.md) defines the Gunicorn
+production target, strict staging environment, immutable digest/provenance
+workflow, deployment prerequisites, and unresolved release blockers. It does
+not replace the workspace Docker Compose development environment.
+
 ## Private submission media operations
 
 Owner-bound draft media uses a private object-storage bucket configured by
