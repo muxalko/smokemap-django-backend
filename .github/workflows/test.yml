@@ -57,6 +57,26 @@ jobs:
             echo "staging settings unexpectedly accepted a missing environment" >&2
             exit 1
           fi
+      - name: Capture production dependency evidence
+        run: |
+          mkdir -p dependency-evidence
+          date --utc --iso-8601=seconds > dependency-evidence/captured-at.txt
+          docker run --rm --entrypoint python smokemap-backend:ci --version > dependency-evidence/python.txt
+          docker run --rm --entrypoint python smokemap-backend:ci -m django --version > dependency-evidence/django.txt
+          docker run --rm --entrypoint python smokemap-backend:ci -m pip inspect > dependency-evidence/production-inspect.json
+          docker run --rm --entrypoint python smokemap-backend:ci -m pip freeze --all > dependency-evidence/production-freeze.txt
+          docker image inspect smokemap-backend:ci --format '{{.Id}}' > dependency-evidence/local-image-id.txt
+      - name: Build and check development image
+        run: |
+          docker build --target development --tag smokemap-backend:development-ci .
+          docker run --rm --entrypoint python smokemap-backend:development-ci -m pip check
+          docker run --rm --entrypoint python smokemap-backend:development-ci -c 'import fiona, pandas; print(fiona.__version__, pandas.__version__)'
+          docker run --rm --entrypoint python smokemap-backend:development-ci -m pip inspect > dependency-evidence/development-image-inspect.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-dependency-evidence
+          path: dependency-evidence/
       - name: Start Gunicorn and probe liveness
         shell: bash
         run: |
@@ -87,7 +107,24 @@ jobs:
           trap 'docker logs "$container_id"; docker stop "$container_id" >/dev/null' EXIT
           for attempt in {1..30}; do
             if docker exec "$container_id" python -c "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/health/live/', headers={'Host': 'api.staging.example.com', 'X-Forwarded-Proto': 'https'}); assert json.load(urllib.request.urlopen(request, timeout=2)) == {'status': 'ok'}"; then
-              docker exec "$container_id" python manage.py check
+              docker exec "$container_id" python manage.py check --deploy
+              docker exec -i "$container_id" python - <<'PYCODE'
+          import json
+          import urllib.error
+          import urllib.request
+
+          request = urllib.request.Request(
+              'http://127.0.0.1:8000/health/ready/',
+              headers={'Host': 'api.staging.example.com', 'X-Forwarded-Proto': 'https'},
+          )
+          try:
+              urllib.request.urlopen(request, timeout=10)
+          except urllib.error.HTTPError as error:
+              assert error.code == 503
+              assert json.load(error) == {'status': 'unavailable'}
+          else:
+              raise AssertionError('unreachable database was ready')
+          PYCODE
               exit 0
             fi
             sleep 1
@@ -129,7 +166,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.12.16"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -140,11 +177,25 @@ jobs:
         run: python -m pip install --requirement requirements-dev.txt
       - name: Check installed dependency compatibility
         run: python -m pip check
+      - name: Capture development dependency closure
+        run: |
+          mkdir -p dependency-evidence
+          date --utc --iso-8601=seconds > dependency-evidence/captured-at.txt
+          python -m pip inspect > dependency-evidence/development-inspect.json
+          python -m pip freeze --all > dependency-evidence/development-freeze.txt
+          python -c 'import fiona, pandas; print(fiona.__version__, pandas.__version__)'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: development-dependency-evidence
+          path: dependency-evidence/
       - run: python manage.py check
       - name: Check migration drift
         run: python manage.py makemigrations --check --dry-run
       - name: Apply migrations for plan inspection
-        run: python manage.py migrate --noinput
+        run: |
+          python manage.py migrate --plan
+          python manage.py migrate --noinput
       - name: Run backend tests
         shell: bash
         run: |
@@ -163,6 +214,8 @@ jobs:
             echo "::error title=Place-search plan failure::$message"
             exit 1
           fi
+      - name: Benchmark representative viewport plan
+        run: python manage.py benchmark_viewport_places
 
   secrets:
     runs-on: ubuntu-latest

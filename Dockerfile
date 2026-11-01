@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12.16-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -23,6 +23,9 @@ FROM dependencies AS development
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends binutils gdal-bin libproj-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-dev.txt ./
+RUN python -m pip install --requirement requirements-dev.txt
 
 COPY . .
 

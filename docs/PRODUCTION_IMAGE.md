@@ -1,7 +1,7 @@
 # Production image and staging runtime contract
 
 The `production` Docker target is the backend's minimal deployment candidate.
-It retains the supported Python 3.12 baseline, installs only the canonical
+It retains the supported Python 3.12.16 baseline, installs only the canonical
 exact-pinned runtime manifest, runs as UID/GID 10001, and serves
 `smokemap.wsgi:app` with Gunicorn. The existing `development` target and Django
 development server remain unchanged.
@@ -46,7 +46,7 @@ Record all of the following in release evidence:
 
 - the full source commit SHA and a clean-tree assertion;
 - the `Dockerfile` and `requirements.txt` SHA-256 values;
-- the resolved `python:3.12-slim-bookworm` base digest from BuildKit
+- the resolved `python:3.12.16-slim-bookworm` base digest from BuildKit
   provenance;
 - the registry index digest and each platform manifest digest;
 - the CI run URL, migration/test result, Gitleaks result, builder identity, and
@@ -122,15 +122,16 @@ jobs start. The private bucket must deny anonymous access.
 
 ## Unresolved release blockers
 
-- Django 4.2 reached end of extended support on 2026-04-07, and this repository
-  is pinned to 4.2.22 rather than even the final 4.2.30 patch. The planned
-  framework/dependency upgrade remains a blocker for an internet-facing
-  production release; it is intentionally not mixed into this container slice.
+- Django 5.2.18 LTS and Python 3.12.16 replace the unsupported bridge in
+  the declared source baseline. Clean image execution, the complete PostGIS
+  suite and exact-image advisory assessment must still pass before rollout.
+  See [the upgrade record](DJANGO52_UPGRADE.md) for achieved and pending proof.
 - `requirements.txt` is an exact-pin input manifest but is not a complete,
-  hash-verified transitive lock. The Python base tag is also mutable. Builds are
-  repeatable from the declared inputs, but not promised to be bit-for-bit
-  reproducible; the pushed registry digest and attestations are the promotion
-  authority.
+  hash-verified transitive lock. The Python micro-version tag is still mutable;
+  registry access in the source sandbox could not establish its immutable
+  digest. Record and verify the official base digest before promotion. Builds
+  are not promised to be bit-for-bit reproducible; the pushed registry digest
+  and attestations remain the promotion authority.
 - No registry, TLS proxy, secret manager, PostGIS service, S3/MinIO service,
   cleanup scheduler, monitoring/error-reporting sink, or deployment platform is
   provisioned by this repository.

@@ -864,6 +864,34 @@ class TokenLifecycleTests(TestCase):
         address.save()
         return address
 
+    def test_non_string_jwt_subject_keeps_stable_denial_on_all_auth_surfaces(self):
+        # PyJWT 2.10+ validates subject types. A signed token with a numeric
+        # subject must remain an authentication error, never an ORM/server error.
+        now = int(timezone.now().timestamp())
+        for subject in (self.user.pk, [str(self.user.pk)], {"id": self.user.pk}):
+            with self.subTest(subject=subject):
+                token = encode_access_token(
+                    {"sub": subject, "type": "access", "iat": now, "exp": now + 300}
+                )
+                verified = self.execute(
+                    "mutation Verify($token: String!) { verifyToken(token: $token) { payload } }",
+                    {"token": token},
+                )
+                self.assertEqual(self.error_code(verified), "INVALID_TOKEN")
+                response = self.client.post(
+                    "/graphql/",
+                    data=json.dumps({"query": "query { requests { id } }"}),
+                    content_type="application/json",
+                    HTTP_AUTHORIZATION=f"Bearer {token}",
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.error_code(response.json()), "INVALID_TOKEN")
+                response = self.client.delete(
+                    "/places/999999/", HTTP_AUTHORIZATION=f"Bearer {token}"
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json(), {"detail": "Invalid bearer token"})
+
     def test_verify_rejects_expired_or_malformed_access_tokens(self):
         malformed = self.execute(
             "mutation { verifyToken(token: \"malformed\") { payload } }"
