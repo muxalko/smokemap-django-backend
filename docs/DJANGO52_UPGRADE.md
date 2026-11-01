@@ -43,7 +43,7 @@ neither PR is modified by this task.
 ## Incremental compatibility review
 
 - [5.0 release notes](https://docs.djangoproject.com/en/5.0/releases/5.0/):
-  review removed legacy timezone/storage APIs, GIS minimums and
+  review removed legacy timezone/storage APIs and OSMGeoAdmin, GIS minimums and
   `update_or_create(create_defaults=...)`. No application import of the removed
   timezone aliases or legacy storage setting was found. The app uses Django's
   built-in PostGIS backend, not a custom database backend.

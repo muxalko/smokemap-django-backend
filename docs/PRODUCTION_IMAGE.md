@@ -3,8 +3,8 @@
 The `production` Docker target is the backend's minimal deployment candidate.
 It retains the supported Python 3.12.16 baseline, installs only the canonical
 exact-pinned runtime manifest, runs as UID/GID 10001, and serves
-`smokemap.wsgi:app` with Gunicorn. The existing `development` target and Django
-development server remain unchanged.
+`smokemap.wsgi:app` with Gunicorn. The `development` target includes the development manifest and retains the
+Django development server. Both targets use the same exact patched pip installer.
 
 This target is a release building block, not authorization to deploy. It makes
 configuration failure deterministic and supplies an immutable artifact path;
@@ -46,8 +46,9 @@ Record all of the following in release evidence:
 
 - the full source commit SHA and a clean-tree assertion;
 - the `Dockerfile` and `requirements.txt` SHA-256 values;
-- the resolved `python:3.12.16-slim-bookworm` base digest from BuildKit
-  provenance;
+- the pinned `python:3.12.16-slim-bookworm` index digest
+  `sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`,
+  verified against BuildKit provenance;
 - the registry index digest and each platform manifest digest;
 - the CI run URL, migration/test result, Gitleaks result, builder identity, and
   build timestamp.

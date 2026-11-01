@@ -15,7 +15,7 @@ RUN apt-get update \
 
 FROM runtime AS dependencies
 
-RUN python -m pip install --upgrade pip==26.2.2
+RUN python -m pip install pip==26.2.2
 
 COPY requirements.txt ./
 RUN python -m pip install --requirement requirements.txt
