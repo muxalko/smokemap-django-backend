@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -15,6 +15,8 @@ RUN apt-get update \
 
 FROM runtime AS dependencies
 
+RUN python -m pip install pip==26.2.2
+
 COPY requirements.txt ./
 RUN python -m pip install --requirement requirements.txt
 
@@ -23,6 +25,9 @@ FROM dependencies AS development
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends binutils gdal-bin libproj-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-dev.txt ./
+RUN python -m pip install --requirement requirements-dev.txt
 
 COPY . .
 

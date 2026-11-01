@@ -1,8 +1,8 @@
 # Backend dependency authority
 
-The backend currently runs on the M5 bridge baseline of Python 3.12 and
-Django 4.2.22. This document defines how dependency declarations work on that
-baseline; it does not authorize a package, framework, or runtime upgrade.
+The declared M5 backend baseline is Python 3.12.16 and Django 5.2.18 LTS.
+Issue #119 replaces the unsupported Django 4.2 bridge. Runtime verification
+and deployment are separate gates; see [upgrade evidence](docs/DJANGO52_UPGRADE.md).
 
 ## Authoritative manifests
 
@@ -56,5 +56,6 @@ python manage.py test
 ```
 
 Do not copy `pip freeze` output from an unrelated environment into either
-manifest. Framework/runtime migrations follow the staged M5 upgrade plan and
-must not be folded into routine manifest maintenance.
+manifest. Further framework/runtime migrations follow the staged M5 upgrade plan.
+CI exports full installed production and development graphs using `pip inspect`
+and `pip freeze --all`; these artifacts describe that build, not a hash lock.
