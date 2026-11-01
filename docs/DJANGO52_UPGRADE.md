@@ -1,6 +1,6 @@
 # Django 5.2 security and compatibility record (#119)
 
-Source assessment: 2026-11-02. Linked umbrella: #55. This is a source upgrade
+Source assessment: 2026-11-01 (UTC). Linked umbrella: #55. This is a source upgrade
 candidate, not production clearance or authorization to deploy.
 
 ## Selected versions and upstream evidence
@@ -14,9 +14,11 @@ asgiref >=3.8.1. Python 3.12 remains supported by
 [Python 3.12.16](https://www.python.org/downloads/release/python-31216/) is the
 October 25 security release; the
 [official image manifest source](https://github.com/docker-library/official-images/blob/master/library/python)
-lists `3.12.16-slim-bookworm`. The source sandbox could not query the registry
-digest or build it. The tag is micro-pinned, still mutable, and needs immutable
-base-digest evidence before promotion.
+lists `3.12.16-slim-bookworm`. Jenkins independently pulled the official image
+and recorded its immutable index digest:
+`sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`.
+The Dockerfile pins that digest. The installer is explicitly patched to pip
+26.2.2 before installing dependencies; CI uses the same installer patch.
 
 Exact selected versions remain in the authoritative requirements files.
 Version-specific PyPI JSON endpoints follow
@@ -64,6 +66,8 @@ PyJWT now validates subject types. The added HTTP/GraphQL regression requires
 numeric/list/object subjects to map to the existing stable `INVALID_TOKEN` or
 REST 401 response; issued subjects already use strings. Existing valid-token,
 refresh rotation/reuse/revocation, role and media/race assertions are retained.
+GeoDjango admin now uses the supported `GISModelAdmin` (default OSM widget);
+the removed `OSMGeoAdmin` import caused the first CI system check to fail.
 No application models, API schema or applied migrations are changed. Migration
 drift and fresh migration execution remain required; no schema rollback is
 claimed necessary based solely on source inspection. If framework-generated
@@ -103,3 +107,25 @@ it never reverses migrations implicitly. No live DB, storage, configuration,
 staging or production access is part of these checks. The legacy Vercel build
 script still selects Python 3.9 and is not a supported path for this baseline;
 use the documented Python 3.12/container paths.
+
+## Jenkins follow-through before final-head acceptance
+
+The initial source head failed CI because local-mode admin autodiscovery
+imported removed OSMGeoAdmin. A separate isolated source copy with the supported
+GISModelAdmin replacement passed all 367 backend tests, fresh PostGIS migration,
+migration drift, search plans and viewport benchmarking on 1 November. This is
+provisional compatibility evidence; final-head CI and builds remain required.
+
+An installed-graph OSV query on the initial candidate found pip 25.0.1 and
+python-dotenv 1.0.1 advisories. Both are patched here (pip 26.2.2 and
+python-dotenv 1.2.4). A separate patched probe returned zero OSV package matches
+across its 39 installed Python distributions. Final exact-image evidence is
+still required. No source metadata response substitutes for that scan.
+
+The Bookworm candidate image scan reported native/OS findings, including
+4 critical and 109 high matches with no listed fixed version. An isolated
+Trixie/GDAL36 probe still reported 5 critical and 103 high matches; it is not
+a security closure and was not selected. Native/GDAL/OS hardening and
+applicability assessment remain explicit production launch blockers. These
+raw counts are not exploit counts, and no risk exception is granted. This
+bounded Django/Python upgrade does not close the overall image-security gate.

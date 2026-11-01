@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12.16-slim-bookworm AS runtime
+FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -14,6 +14,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime AS dependencies
+
+RUN python -m pip install --upgrade pip==26.2.2
 
 COPY requirements.txt ./
 RUN python -m pip install --requirement requirements.txt

@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .forms import CustomUserCreationForm, CustomUserChangeForm
 from .models import CustomUser
-from django.contrib.gis.admin import OSMGeoAdmin
+from django.contrib.gis.admin import GISModelAdmin
 
 from .models import Category, Tag, Address, Place
 
@@ -43,5 +43,5 @@ class CategoryAdmin(admin.ModelAdmin):
 admin.site.register(Tag)
 admin.site.register(Address)
 @admin.register(Place)
-class PlaceAdmin(OSMGeoAdmin):
+class PlaceAdmin(GISModelAdmin):
     list_display = ('name', 'address')
