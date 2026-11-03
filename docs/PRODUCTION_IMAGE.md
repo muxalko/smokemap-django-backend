@@ -123,16 +123,20 @@ jobs start. The private bucket must deny anonymous access.
 
 ## Unresolved release blockers
 
-- Django 5.2.18 LTS and Python 3.12.16 replace the unsupported bridge in
+- Django 5.2.19 LTS and Python 3.12.16 replace the unsupported bridge in
   the declared source baseline. Clean image execution, the complete PostGIS
   suite and exact-image advisory assessment must still pass before rollout.
   See [the upgrade record](DJANGO52_UPGRADE.md) for achieved and pending proof.
 - `requirements.txt` is an exact-pin input manifest but is not a complete,
-  hash-verified transitive lock. The Python micro-version tag is still mutable;
-  registry access in the source sandbox could not establish its immutable
-  digest. Record and verify the official base digest before promotion. Builds
+  hash-verified transitive lock. The Python base is digest-pinned above;
+  verify that digest against build provenance before promotion. Builds
   are not promised to be bit-for-bit reproducible; the pushed registry digest
   and attestations remain the promotion authority.
+- Bookworm GDAL 3.6 remains below 3.9, so Django 5.2.19 cannot fully protect
+  `SpatialReference` string parsing. Keep `gis.W001` visible. Native/GDAL/OS
+  hardening and bundled-pip advisory assessment remain production blockers;
+  the installer pip patch alone does not clear every bundled copy. No finding
+  is waived by this bounded patch. See the upgrade record for app applicability.
 - No registry, TLS proxy, secret manager, PostGIS service, S3/MinIO service,
   cleanup scheduler, monitoring/error-reporting sink, or deployment platform is
   provisioned by this repository.

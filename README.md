@@ -4,9 +4,9 @@
 
 ## Checks and tests
 
-The declared dependency baseline is Django 5.2.18 LTS on Python 3.12.16.
+The declared dependency baseline is Django 5.2.19 LTS on Python 3.12.16.
 [The upgrade record](docs/DJANGO52_UPGRADE.md) documents compatibility review,
-security scope and pending runtime verification for issue #119.
+security scope and pending runtime verification for issues #119 and #121.
 
 Docker Compose from the workspace root remains the canonical local environment:
 

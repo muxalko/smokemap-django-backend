@@ -1,15 +1,16 @@
-# Django 5.2 security and compatibility record (#119)
+# Django 5.2 security and compatibility record (#119, #121)
 
-Source assessment: 2026-11-01 (UTC). Linked umbrella: #55. This is a source upgrade
+Source assessment: 2026-11-03 (UTC); #121 patch assessment supersedes the
+November 1 selection from #119. Linked umbrella: #55. This is a source upgrade
 candidate, not production clearance or authorization to deploy.
 
 ## Selected versions and upstream evidence
 
-[Django's support table](https://www.djangoproject.com/download/) lists 5.2.18
+[Django's support table](https://www.djangoproject.com/download/) lists 5.2.19
 as the supported 5.2 LTS patch (extended support through April 2028).
-[PyPI version metadata](https://pypi.org/pypi/Django/5.2.18/json) confirms a
-non-yanked stable wheel uploaded 2026-10-06, requiring Python >=3.10 and
-asgiref >=3.8.1. Python 3.12 remains supported by
+[PyPI version metadata](https://pypi.org/pypi/Django/5.2.19/json) confirms a
+non-yanked stable wheel uploaded 2026-11-03 at 15:22:03 UTC, requiring
+Python >=3.10 and asgiref >=3.8.1. Python 3.12 remains supported by
 [Django 5.2](https://docs.djangoproject.com/en/5.2/faq/install/).
 [Python 3.12.16](https://www.python.org/downloads/release/python-31216/) is the
 October 25 security release; the
@@ -26,7 +27,7 @@ Version-specific PyPI JSON endpoints follow
 
 | Boundary | Selected inputs and reason |
 | --- | --- |
-| Django/ASGI | Django 5.2.18, asgiref 3.11.0 |
+| Django/ASGI | Django 5.2.19, asgiref 3.11.0 |
 | REST/GIS/filter | DRF 3.18.2, DRF-GIS 1.3.0, django-filter 25.2; GIS metadata permits DRF <3.19 and filter <27. Older GIS 1.2.0 caps DRF below 3.17. |
 | GraphQL | graphene-django 3.2.3, graphql-core 3.2.12; retain Graphene 3 and graphql-core 3.2 semantics |
 | JWT | PyJWT 2.15.1 with cryptography explicitly pinned to 50.0.2; SimpleJWT 5.5.1 retained as a dependency, without activating its authentication backend |
@@ -72,6 +73,37 @@ No application models, API schema or applied migrations are changed. Migration
 drift and fresh migration execution remain required; no schema rollback is
 claimed necessary based solely on source inspection. If framework-generated
 drift appears, inspect SQL and forward/backward compatibility before proceeding.
+
+## November 3 security patch and application applicability (#121)
+
+[5.2.19 release notes](https://docs.djangoproject.com/en/5.2/releases/5.2.19/)
+report four low-severity fixes and one moderate fix over 5.2.18:
+
+| CVE (severity) | Upstream change | Current application boundary |
+| --- | --- | --- |
+| CVE-2026-108147 (low) | Bounds memory use for base64 multipart uploads. | Applicable in every settings mode: the public CSRF-exempt `/graphql/` endpoint uses Graphene-Django `GraphQLView`, whose multipart body parser accesses `request.POST` before JWT/Graphene middleware authentication. This invokes Django MultiPartParser even though REST accepts JSON and the normal image-upload flow sends bytes directly to object storage. Local admin forms also parse multipart. The 5.2.19 patch is required for this public pre-authentication path. |
+| CVE-2026-111211 (low) | Escapes invalid geometry form values in logs. | `backend/admin.py` registers Address and GIS Place admin; admin is disabled in strict staging. Public serializers are distinct from Django GIS forms. |
+| CVE-2026-111362 (moderate) | Rejects external GeoJSON CRS in geometry construction, forms and spatial lookups. | Submissions use validated numeric coordinates and `Point(..., srid=4326)` (`backend/submissions.py`). Viewport bounds become a numeric polygon (`backend/views.py`); legacy bbox filters take numeric bounds. GeoJSON output does not imply arbitrary GeoJSON input. Local admin geometry forms remain relevant. |
+| CVE-2026-113593 (low) | Separates missing and empty Vary header cache keys. | No `UpdateCacheMiddleware` or `cache_page()` callers are configured. Public managed media explicitly returns `Cache-Control: no-store`. |
+| CVE-2026-114582 (low) | Restricts SpatialReference string parsing; rejects DICT references on all GDAL versions. | No direct application `SpatialReference` or geometry/raster transform callers were found. Models and submission points use integer SRIDs. |
+
+Full string-parsing protection requires GDAL >=3.9. The retained Bookworm
+GDAL 3.6 is below that threshold: expect new `gis.W001`, keep it visible, and
+do not claim full remediation. Prefer integer SRIDs and validated points;
+any future string CRS input on older GDAL needs an explicit allowlist.
+`DataSource`/`LayerMapping` still allow external CRS for trusted imports:
+`load_shp.py` uses `LayerMapping` with a fixed local shapefile path and
+`transform=False`; it must not become an untrusted upload ingestion path.
+
+The wheel SHA-256 from current PyPI metadata is
+`5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00`;
+the sdist SHA-256 is
+`ad03d8abc51dbff95ebf34b27123cf0c26a3b62db7ba0cd520783686362533d1`.
+Both artifacts are non-yanked. These metadata digests are provenance references,
+not a new lockfile or proof of an installed graph. Only the Django runtime pin
+changes in #121; all other pins, the Python image digest, configuration,
+application code, tests and migrations remain unchanged. Existing boundary
+regressions remain the acceptance suite; no new input boundary is introduced.
 
 ## Achieved evidence and remaining gates
 
