@@ -1,8 +1,8 @@
 # Backend dependency authority
 
-The declared M5 backend baseline is Python 3.12.16 and Django 5.2.18 LTS.
-Issue #119 replaces the unsupported Django 4.2 bridge. Runtime verification
-and deployment are separate gates; see [upgrade evidence](docs/DJANGO52_UPGRADE.md).
+The declared M5 backend baseline is Python 3.12.16 and Django 5.2.19 LTS.
+Issue #121 advances the security patch from #119, which replaces the unsupported
+Django 4.2 bridge. Runtime verification and deployment are separate gates; see [upgrade evidence](docs/DJANGO52_UPGRADE.md).
 
 ## Authoritative manifests
 
