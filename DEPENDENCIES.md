@@ -57,5 +57,17 @@ python manage.py test
 
 Do not copy `pip freeze` output from an unrelated environment into either
 manifest. Further framework/runtime migrations follow the staged M5 upgrade plan.
-CI exports full installed production and development graphs using `pip inspect`
-and `pip freeze --all`; these artifacts describe that build, not a hash lock.
+The container installer is separately hash-pinned in
+`docker/requirements-installer.txt`. It does not replace either application
+manifest. Both image builds use pip 26.2.2 and run `pip check`. Development also
+replaces CPython's bundled pip wheel, so offline `venv` creation cannot restore
+pip 25.0.1. Production captures the validated build graph, then removes pip and
+ensurepip entirely; install dependencies at build time, never in a running
+production container.
+
+CI exports the build graph using `pip inspect` and `pip freeze --all`, plus
+separate inventories of the actual final production/development distributions
+and Debian packages. The production build graph includes the subsequently
+removed installer; `production-runtime.json` records the final set. These
+artifacts describe that build, not a hash lock. See
+[the native and installer contract](docs/NATIVE_RUNTIME.md) for verification.

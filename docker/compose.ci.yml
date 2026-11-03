@@ -1,0 +1,43 @@
+# Disposable candidate only: no host ports, bind mounts, or persistent volumes.
+name: ${COMPOSE_PROJECT_NAME:?Set a unique candidate project name}
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    labels:
+      io.smokemap.task: gdal-installer-hardening
+    environment:
+      POSTGRES_DB: smokemap_ci
+      POSTGRES_USER: smokemap_ci
+      POSTGRES_PASSWORD: local-ci-only
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U smokemap_ci -d smokemap_ci]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  backend:
+    image: smokemap-gdal-backend:${COMPOSE_PROJECT_NAME}
+    build:
+      context: ..
+      target: development
+      args:
+        VCS_REF: ${CANDIDATE_SHA:-unknown}
+    labels:
+      io.smokemap.task: gdal-installer-hardening
+    environment:
+      SETTINGS_MODE: local
+      DJANGO_SECRET_KEY: local-ci-only-django-key
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: smokemap_ci
+      POSTGRES_USER: smokemap_ci
+      POSTGRES_PASSWORD: local-ci-only
+      POSTGRES_OPTIONS: "-c search_path=public"
+      AWS_ACCESS_KEY_ID: local-ci-only
+      AWS_SECRET_ACCESS_KEY: local-ci-only
+      AWS_REGION: us-east-1
+      AWS_STORAGE_BUCKET_NAME: local-ci-only
+      AWS_S3_ENDPOINT_URL: http://127.0.0.1:9000
+      AWS_S3_ADDRESSING_STYLE: path

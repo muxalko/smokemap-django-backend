@@ -4,6 +4,13 @@ Source assessment: 2026-11-03 (UTC); #121 patch assessment supersedes the
 November 1 selection from #119. Linked umbrella: #55. This is a source upgrade
 candidate, not production clearance or authorization to deploy.
 
+This record describes the #119/#121 upgrade. The subsequent bounded
+[native/installer candidate](NATIVE_RUNTIME.md) selects Trixie GDAL 3.10.3,
+replaces development's bundled pip and removes production installers. Its
+exact-image checks supersede the Bookworm/GDAL 3.6 declarations below only
+when those checks have actually passed; the historical scans remain valid
+for their identified images, not as clearance for the new candidate.
+
 ## Selected versions and upstream evidence
 
 [Django's support table](https://www.djangoproject.com/download/) lists 5.2.19
