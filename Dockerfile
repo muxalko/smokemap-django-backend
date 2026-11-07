@@ -1,6 +1,4 @@
-# syntax=docker/dockerfile:1
-
-FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
+FROM python:3.12.16-slim-trixie@sha256:8523d6abeb48ceae0b7240d30c5808fc26cb79c1a635bacdf19cf3baecfbec07 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,24 +8,35 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends libgdal32 \
+    && apt-get install --yes --no-install-recommends libgdal36=3.10.3+dfsg-1 \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime AS dependencies
 
-RUN python -m pip install pip==26.2.2
+COPY docker/requirements-installer.txt docker/update_ensurepip.py ./docker/
+RUN python -m pip download --only-binary=:all: --no-deps --require-hashes \
+        --requirement docker/requirements-installer.txt --dest /tmp/installer \
+    && python -m pip install --no-index --no-deps /tmp/installer/pip-26.2.2-py3-none-any.whl \
+    && python docker/update_ensurepip.py /tmp/installer/pip-26.2.2-py3-none-any.whl \
+    && rm -rf /tmp/installer
 
 COPY requirements.txt ./
 RUN python -m pip install --requirement requirements.txt
+RUN python -m pip check
 
 FROM dependencies AS development
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends binutils gdal-bin libproj-dev \
+    && apt-get install --yes --no-install-recommends gdal-bin=3.10.3+dfsg-1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-dev.txt ./
 RUN python -m pip install --requirement requirements-dev.txt
+RUN python -m pip check
+
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.source="https://github.com/muxalko/smokemap-django-backend" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 COPY . .
 
@@ -36,6 +45,13 @@ EXPOSE 8000
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
 
 FROM dependencies AS production
+
+# Keep the validated build graph as evidence, then remove both installer copies.
+RUN mkdir -p /usr/local/share/smokemap/dependencies \
+    && python -m pip inspect > /usr/local/share/smokemap/dependencies/build-inspect.json \
+    && python -m pip freeze --all > /usr/local/share/smokemap/dependencies/build-freeze.txt \
+    && python -m pip uninstall --yes pip \
+    && rm -rf /usr/local/lib/python3.12/ensurepip
 
 ARG VCS_REF=unknown
 

@@ -4,7 +4,10 @@ The `production` Docker target is the backend's minimal deployment candidate.
 It retains the supported Python 3.12.16 baseline, installs only the canonical
 exact-pinned runtime manifest, runs as UID/GID 10001, and serves
 `smokemap.wsgi:app` with Gunicorn. The `development` target includes the development manifest and retains the
-Django development server. Both targets use the same exact patched pip installer.
+Django development server. Both targets build with the same hash-verified pip
+installer; the production filesystem contains neither pip nor ensurepip.
+Both use Trixie's GDAL 3.10.3 and compatible GEOS/PROJ runtime libraries.
+See [native/installer verification](NATIVE_RUNTIME.md).
 
 This target is a release building block, not authorization to deploy. It makes
 configuration failure deterministic and supplies an immutable artifact path;
@@ -46,8 +49,8 @@ Record all of the following in release evidence:
 
 - the full source commit SHA and a clean-tree assertion;
 - the `Dockerfile` and `requirements.txt` SHA-256 values;
-- the pinned `python:3.12.16-slim-bookworm` index digest
-  `sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`,
+- the pinned `python:3.12.16-slim-trixie` index digest
+  `sha256:8523d6abeb48ceae0b7240d30c5808fc26cb79c1a635bacdf19cf3baecfbec07`,
   verified against BuildKit provenance;
 - the registry index digest and each platform manifest digest;
 - the CI run URL, migration/test result, Gitleaks result, builder identity, and
@@ -132,11 +135,13 @@ jobs start. The private bucket must deny anonymous access.
   verify that digest against build provenance before promotion. Builds
   are not promised to be bit-for-bit reproducible; the pushed registry digest
   and attestations remain the promotion authority.
-- Bookworm GDAL 3.6 remains below 3.9, so Django 5.2.19 cannot fully protect
-  `SpatialReference` string parsing. Keep `gis.W001` visible. Native/GDAL/OS
-  hardening and bundled-pip advisory assessment remain production blockers;
-  the installer pip patch alone does not clear every bundled copy. No finding
-  is waived by this bounded patch. See the upgrade record for app applicability.
+- The native candidate now meets Django's GDAL >=3.9 string-parsing security
+  requirement without suppressing `gis.W001`. CI must prove native imports,
+  transformations and file/network rejection on both actual images. Changing
+  Debian suites and removing installer copies does not clear all native/OS or
+  vendored-library advisories. Exact-image security assessment remains a
+  production blocker; prior Trixie probe findings are not waived. See the
+  upgrade record and native contract for the evidence boundary.
 - No registry, TLS proxy, secret manager, PostGIS service, S3/MinIO service,
   cleanup scheduler, monitoring/error-reporting sink, or deployment platform is
   provisioned by this repository.

@@ -1,5 +1,8 @@
 .git
 .gitignore
+.aws/
+.codex/
+.agents/
 .vercel
 .env*
 *.env
@@ -10,3 +13,4 @@ logs/
 venv/
 .venv/
 staticfiles_build/
+dependency-evidence/
